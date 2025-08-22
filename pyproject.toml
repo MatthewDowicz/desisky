@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "desisky"
+dynamic = ["version"]
+description = ''
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["astronomy", "DESI", "sky spectra", "generative model"]
+authors = [
+  { name = "MatthewDowicz", email = "mdowicz@uci.edu" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "numpy",
+  "scipy",
+]
+
+# ---- CPU/GPU install tracks (Option A) ----
+# Both include optax + *CPU* PyTorch (good for dataloaders on any machine).
+# Note: 'torch' from PyPI defaults to CPU wheels. CUDA wheels require a custom index-url
+# and should be documented in README (can't be expressed in pyproject).
+[project.optional-dependencies]
+cpu    = ["jax", "equinox", "torch"]
+cuda12 = ["jax[cuda12]", "equinox", "optax", "torch"]
+
+
+[project.urls]
+Documentation = "https://github.com/MatthewDowicz/desisky#readme"
+Issues = "https://github.com/MatthewDowicz/desisky/issues"
+Source = "https://github.com/MatthewDowicz/desisky"
+
+[tool.hatch.version]
+path = "src/desisky/__about__.py"
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
+]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/desisky tests}"
+
+[tool.coverage.run]
+source_pkgs = ["desisky", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/desisky/__about__.py",
+]
+
+[tool.coverage.paths]
+desisky = ["src/desisky", "*/desisky/src/desisky"]
+tests = ["tests", "*/desisky/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]

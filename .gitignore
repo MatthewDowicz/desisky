@@ -1,0 +1,96 @@
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Python bytecode / compiled extensions
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.Python
+
+# Builds / packaging
+build/
+dist/
+downloads/
+.eggs/
+*.egg-info/
+*.egg
+wheels/
+share/python-wheels/
+pip-wheel-metadata/
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env/
+.python-version
+
+# Conda (only matters if you ever create envs in-repo)
+conda-bld/
+.conda/
+#mamba/
+#.conda-env/
+
+# Jupyter
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+*.nbconvert.ipynb
+*.nb.html
+nbconvert/
+
+# Tests / coverage / tooling caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.cache/
+coverage.xml
+pytestdebug.log
+
+# Docs (if you add Sphinx/MkDocs later)
+docs/_build/
+site/
+**/.doctrees
+
+# Logs & temp
+*.log
+logs/
+*.bak
+*.tmp
+*~
+
+# ML experiment outputs & weights (common defaults)
+wandb/
+mlruns/
+tensorboard/
+tb_logs/
+lightning_logs/
+runs/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.h5
+*.safetensors
+
+# Editors/IDEs
+.vscode/
+.idea/
+*.code-workspace
+
+# OPTIONAL: uncomment if you create these dirs for big artifacts
+# data/
+# outputs/
+# examples/outputs/
+# models/
+# weights/
