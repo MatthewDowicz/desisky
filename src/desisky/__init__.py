@@ -2,15 +2,15 @@
 #
 # SPDX-License-Identifier: MIT
 
-from .io.model_io import REGISTRY, load_or_builtin, get_user_model_dir  # re-export
+# SPDX…
 
-def _ensure_registered(kind: str) -> None:
-    """Lazy-register known models on first use to avoid heavy imports."""
-    if kind == "broadband" and "broadband" not in REGISTRY:
-        # Importing this submodule runs `register_model(...)` as a side-effect.
-        from .models import broadband  # noqa: F401
+import importlib
 
-def load_model(kind: str, path=None, constructor=None):
-    """Convenience wrapper that ensures registration, then loads."""
-    _ensure_registered(kind)
-    return load_or_builtin(kind, path=path, constructor=constructor)
+__all__ = ["io"]
+
+def __getattr__(name):
+    if name == "io":
+        mod = importlib.import_module(".io", __name__)
+        globals()["io"] = mod  # cache for future lookups
+        return mod
+    raise AttributeError(name)
