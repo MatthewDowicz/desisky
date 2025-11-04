@@ -88,6 +88,10 @@ checkpoints/
 .idea/
 *.code-workspace
 
+# Example notebook archives and temporary data
+examples/_archive/
+examples/tmp/
+
 # OPTIONAL: uncomment if you create these dirs for big artifacts
 # data/
 # outputs/
