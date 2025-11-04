@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
   "numpy",
   "scipy",
+  "requests",
 ]
 
 # ---- CPU/GPU install tracks (Option A) ----
@@ -35,7 +36,11 @@ dependencies = [
 [project.optional-dependencies]
 cpu    = ["jax", "equinox", "torch"]
 cuda12 = ["jax[cuda12]", "equinox", "optax", "torch"]
+data   = ["fitsio", "pandas"]
 
+
+[project.scripts]
+desisky-data = "desisky.scripts.download_data:main"
 
 [project.urls]
 Documentation = "https://github.com/MatthewDowicz/desisky#readme"
