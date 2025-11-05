@@ -82,13 +82,20 @@ def load_skyspec_vac(path: Path, *, as_dataframe: bool = True):
         flux = f["FLUX"].read()
         meta_raw = f["METADATA"].read()
 
+    # Convert to native byte order (FITS uses big-endian, pandas needs native)
+    import numpy as np
+    wavelength = np.asarray(wavelength, dtype=wavelength.dtype.newbyteorder('='))
+    flux = np.asarray(flux, dtype=flux.dtype.newbyteorder('='))
+
     # Convert metadata if requested
     if as_dataframe:
         import pandas as pd
 
-        metadata = pd.DataFrame(meta_raw)
+        # Convert structured array to native byte order before DataFrame conversion
+        meta_native = np.asarray(meta_raw, dtype=meta_raw.dtype.newbyteorder('='))
+        metadata = pd.DataFrame(meta_native)
     else:
-        metadata = meta_raw
+        metadata = np.asarray(meta_raw, dtype=meta_raw.dtype.newbyteorder('='))
 
     # Basic sanity checks
     assert flux.shape[1] == wavelength.shape[0], "flux axis != wavelength length"
