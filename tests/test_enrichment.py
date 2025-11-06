@@ -266,6 +266,9 @@ class TestSkySpecVACEnrichment:
         """Test that enrichment only applies to v1.0."""
         from desisky.data import SkySpecVAC
 
+        pytest.importorskip("speclite")
+        pytest.importorskip("astropy")
+
         # For future versions, enrichment should be skipped
         # For now, only v1.0 exists, so this test documents the behavior
         vac = SkySpecVAC(version="v1.0", download=False)
