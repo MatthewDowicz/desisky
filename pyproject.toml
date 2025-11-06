@@ -36,7 +36,7 @@ dependencies = [
 [project.optional-dependencies]
 cpu    = ["jax", "equinox", "torch"]
 cuda12 = ["jax[cuda12]", "equinox", "optax", "torch"]
-data   = ["fitsio", "pandas"]
+data   = ["fitsio", "pandas", "speclite", "astropy"]
 
 
 [project.scripts]
