@@ -1,5 +1,10 @@
+import os
 import pytest
 from desisky.io.model_io import REGISTRY
+
+# Force JAX to use CPU for all tests to avoid CUDA out of memory errors
+# This must be set BEFORE importing JAX
+os.environ['JAX_PLATFORM_NAME'] = 'cpu'
 
 
 @pytest.fixture(scope="session", autouse=True)

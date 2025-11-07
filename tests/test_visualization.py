@@ -102,7 +102,8 @@ def test_plot_loss_curve_custom_title(mock_losses):
     fig = plot_loss_curve(train_losses, test_losses, title="Custom Title")
 
     assert isinstance(fig, Figure)
-    assert fig._suptitle.get_text() == "Custom Title"
+    # Check that the axis has the correct title
+    assert fig.axes[0].get_title() == "Custom Title"
 
     plt.close(fig)
 
