@@ -223,7 +223,7 @@ def plot_nn_outlier_analysis(
         )
 
         ax.axhline(
-            +outlier_mag, color="red", ls="--", lw=2, label=f"$\pm$ {outlier_mag}"
+            +outlier_mag, color="red", ls="--", lw=2, label=f"$\\pm$ {outlier_mag}"
         )
         ax.axhline(-outlier_mag, color="red", ls="--", lw=2)
         ax.axhline(0.0, color="black", ls="--", lw=2, label="Zero Residual")
@@ -301,7 +301,7 @@ def plot_nn_outlier_analysis(
     ):
         ax.hist(data, bins=100, color="gray", alpha=0.7)
         ax.axvline(0.0, color="black", ls="--", label="Zero Residual")
-        ax.axvline(+outlier_mag, color="red", ls="--", label=f"$\pm$ {outlier_mag}")
+        ax.axvline(+outlier_mag, color="red", ls="--", label=f"$\\pm$ {outlier_mag}")
         ax.axvline(-outlier_mag, color="red", ls="--")
         ax.set_xlim(-1.25, 1.25)
         ax.set_title(f"Residual Histogram ({lbl})", fontsize=12)
