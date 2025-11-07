@@ -34,9 +34,12 @@ dependencies = [
 # Note: 'torch' from PyPI defaults to CPU wheels. CUDA wheels require a custom index-url
 # and should be documented in README (can't be expressed in pyproject).
 [project.optional-dependencies]
-cpu    = ["jax", "equinox", "torch"]
+cpu    = ["jax", "equinox", "optax", "torch"]
 cuda12 = ["jax[cuda12]", "equinox", "optax", "torch"]
 data   = ["fitsio", "pandas", "speclite", "astropy"]
+train  = ["jax", "equinox", "optax", "torch"]
+viz    = ["matplotlib"]
+all    = ["jax", "equinox", "optax", "torch", "fitsio", "pandas", "speclite", "astropy", "matplotlib"]
 
 
 [project.scripts]

@@ -305,6 +305,7 @@ class SkySpecVAC:
         - MOONALT > 5 (Moon above horizon)
         - MOONFRAC > 0.5 (Moon >50% illuminated)
         - MOONSEP <= 90 (Moon within 90 degrees)
+        - TRANSPARENCY_GFA > 0 (valid transparency measurements)
 
         By default, enrichment is enabled to include ECLIPSE_FRAC, which is
         important for modeling moon contamination effects.
@@ -337,7 +338,8 @@ class SkySpecVAC:
             (metadata['SUNALT'] < -20) &
             (metadata['MOONALT'] > 5) &
             (metadata['MOONFRAC'] > 0.5) &
-            (metadata['MOONSEP'] <= 90)
+            (metadata['MOONSEP'] <= 90) &
+            (metadata['TRANSPARENCY_GFA'] > 0)
         )
 
         # Subset data

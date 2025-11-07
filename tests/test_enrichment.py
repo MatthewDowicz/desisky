@@ -238,6 +238,7 @@ class TestSkySpecVACEnrichment:
         assert (meta['MOONALT'] > 5).all()
         assert (meta['MOONFRAC'] > 0.5).all()
         assert (meta['MOONSEP'] <= 90).all()
+        assert (meta['TRANSPARENCY_GFA'] > 0).all()  # New: filter invalid transparency
 
         # Should have enrichment columns by default
         assert 'SKY_MAG_V_SPEC' in meta.columns
