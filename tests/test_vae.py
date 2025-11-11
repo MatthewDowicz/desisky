@@ -286,6 +286,23 @@ class TestSkyVAEForwardPass:
         assert batch_results['latent'].shape == (5, 8)
         assert batch_results['output'].shape == (5, 100)
 
+    def test_forward_batch_direct(self, vae):
+        """Test batch forward pass without explicit vmap (internal batching)."""
+        batch = jnp.ones((5, 100)) * 10.0
+        key = jr.PRNGKey(42)
+
+        # Call directly on batch - model should handle batching internally
+        batch_results = vae(batch, key)
+
+        assert batch_results['mean'].shape == (5, 8)
+        assert batch_results['logvar'].shape == (5, 8)
+        assert batch_results['latent'].shape == (5, 8)
+        assert batch_results['output'].shape == (5, 100)
+
+        # Check all values are finite
+        for key_name, value in batch_results.items():
+            assert jnp.all(jnp.isfinite(value)), f"{key_name} contains non-finite values"
+
 
 class TestSkyVAEReconstructionQuality:
     """Test VAE reconstruction quality."""
