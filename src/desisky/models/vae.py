@@ -152,13 +152,18 @@ class SkyVAE(eqx.Module):
         """
         Full forward pass: encode, sample, decode.
 
-        For batch processing, use with jax.vmap:
-        >>> outputs = jax.vmap(vae, in_axes=(0, None))(batch, key)
+        This method handles both single samples and batches:
+        - Single sample: x.shape = (in_channels,)
+        - Batch: x.shape = (batch_size, in_channels)
+
+        For batched inputs, encode and decode are vmapped, but sample handles
+        the batch internally via broadcasting.
 
         Parameters
         ----------
         x : jnp.ndarray
-            Input spectrum of shape (in_channels,)
+            Input spectrum. Shape (in_channels,) for single sample
+            or (batch_size, in_channels) for batch.
         key : jax.random.PRNGKey
             Random key for sampling latent space
 
@@ -166,14 +171,34 @@ class SkyVAE(eqx.Module):
         -------
         dict
             Dictionary containing:
-            - 'mean': Latent mean, shape (latent_dim,)
-            - 'logvar': Latent log-variance, shape (latent_dim,)
-            - 'latent': Sampled latent vector, shape (latent_dim,)
-            - 'output': Reconstructed spectrum, shape (in_channels,)
+            - 'mean': Latent mean(s)
+            - 'logvar': Latent log-variance(s)
+            - 'latent': Sampled latent vector(s)
+            - 'output': Reconstructed spectrum/spectra
+
+        Examples
+        --------
+        Single sample:
+        >>> result = vae(single_spectrum, key)
+        >>> result['mean'].shape  # (latent_dim,)
+
+        Batch processing:
+        >>> result = vae(batch_of_spectra, key)
+        >>> result['mean'].shape  # (batch_size, latent_dim)
         """
-        mean, logvar = self.encode(x)
-        z = self.sample(mean, logvar, key)
-        out = self.decode(z)
+        # Check if input is batched
+        is_batched = x.ndim == 2
+
+        if is_batched:
+            # Batch processing: vmap encode and decode, but not sample
+            mean, logvar = jax.vmap(self.encode)(x)
+            z = self.sample(mean, logvar, key)  # sample handles batches internally
+            out = jax.vmap(self.decode)(z)
+        else:
+            # Single sample processing
+            mean, logvar = self.encode(x)
+            z = self.sample(mean, logvar, key)
+            out = self.decode(z)
 
         return {
             'mean': mean,
@@ -212,19 +237,24 @@ class SkyVAE(eqx.Module):
         """
         Sample from latent distribution using reparameterization trick.
 
+        This method handles both single samples and batches through JAX broadcasting.
+        When called with batched inputs, all samples use the same random key.
+
         Parameters
         ----------
         mean : jnp.ndarray
-            Latent mean, shape (latent_dim,)
+            Latent mean. Shape (latent_dim,) for single sample
+            or (batch_size, latent_dim) for batch.
         log_var : jnp.ndarray
-            Latent log-variance, shape (latent_dim,)
+            Latent log-variance. Shape (latent_dim,) for single sample
+            or (batch_size, latent_dim) for batch.
         key : jax.random.PRNGKey
-            Random key for sampling
+            Random key for sampling (shared across batch if batched)
 
         Returns
         -------
         z : jnp.ndarray
-            Sampled latent vector, shape (latent_dim,)
+            Sampled latent vector(s). Shape matches input mean/log_var.
         """
         std = jnp.exp(0.5 * log_var)
         epsilon = jax.random.normal(key, std.shape)
