@@ -39,26 +39,30 @@ def _broadband_case():
         check_output=check_output,
     )
 
-# # Optional future examples — keep them commented or mark-skipped until available.
-# def _vae_case():  # example shape contracts; adjust to your real API
-#     vae = pytest.importorskip("desisky.models.vae")        # skip if not present
-#     arch = dict(in_size=1024, latent_dim=64, hidden=256, depth=4)
-#     def make_input():
-#         return jnp.ones((arch["in_size"],))
-#     def check_output(y):
-#         # suppose forward returns (recon, mu, logvar)
-#         recon, mu, logvar = y
-#         assert recon.shape == (arch["in_size"],)
-#         assert mu.shape == (arch["latent_dim"],)
-#         assert logvar.shape == (arch["latent_dim"],)
-#     return ModelCase(
-#         kind="vae",
-#         constructor=vae.make_vae,
-#         arch=arch,
-#         resource="vae_weights.eqx",
-#         make_input=make_input,
-#         check_output=check_output,
-#     )
+def _vae_case():
+    from desisky.models.vae import make_SkyVAE
+    import jax.random as jr
+    arch = dict(in_channels=7781, latent_dim=8)
+    def make_input():
+        # VAE forward pass needs (x, key)
+        x = jnp.ones((arch["in_channels"],))
+        key = jr.PRNGKey(0)
+        return (x, key)
+    def check_output(result):
+        # VAE forward returns dict with 'mean', 'logvar', 'latent', 'output'
+        assert isinstance(result, dict)
+        assert result['mean'].shape == (arch["latent_dim"],)
+        assert result['logvar'].shape == (arch["latent_dim"],)
+        assert result['latent'].shape == (arch["latent_dim"],)
+        assert result['output'].shape == (arch["in_channels"],)
+    return ModelCase(
+        kind="vae",
+        constructor=make_SkyVAE,
+        arch=arch,
+        resource="vae_weights.eqx",
+        make_input=make_input,
+        check_output=check_output,
+    )
 
 # def _diffusion_case():  # example; adjust to your UNet/diffuser API
 #     dm = pytest.importorskip("desisky.models.diffusion")
@@ -81,9 +85,8 @@ def _broadband_case():
 #     )
 
 def _cases():
-    cases = [_broadband_case()]
+    cases = [_broadband_case(), _vae_case()]
     # Uncomment once we have these models
-    # cases.append(_vae_case())
     # cases.append(_diffusion_case())
     return cases 
 
