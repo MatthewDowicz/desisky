@@ -6,7 +6,10 @@
 
 import importlib
 
-__all__ = ["io"]
+# Import models to trigger registration with the IO system
+from . import models  # noqa: F401
+
+__all__ = ["io", "models"]
 
 def __getattr__(name):
     if name == "io":
