@@ -10,8 +10,9 @@
 `desisky` provides machine learning models and tools for DESI sky modeling:
 
 1. **Predictive broadband model** - Returns surface brightness in V, g, r, and z photometric bands from observational metadata
-2. **Generative sky-spectrum model** *(coming soon)* - Synthesizes realistic night-sky emission spectra using latent diffusion models
-3. **Data utilities** - Download and load DESI sky spectra Value-Added Catalog (VAC) with automatic integrity verification
+2. **Variational Autoencoder (VAE)** - Compress sky spectra into compact latent representations for analysis, anomaly detection, and dimensionality reduction
+3. **Generative sky-spectrum model** *(coming soon)* - Synthesizes realistic night-sky emission spectra using latent diffusion models
+4. **Data utilities** - Download and load DESI sky spectra Value-Added Catalog (VAC) with automatic integrity verification
 
 Built with **JAX/Equinox** and designed to integrate with SpecSim and survey forecasting workflows. This repository hosts the code and notebooks supporting the forthcoming paper by Dowicz et al. (20XX).
 
@@ -66,6 +67,36 @@ y = model(x)  # Shape: (4,)
 print(f"Predicted magnitudes: {y}")
 ```
 
+### Load pre-trained VAE and encode sky spectra
+
+```python
+from desisky.io import load_builtin
+from desisky.data import SkySpecVAC
+import jax.random as jr
+
+# Load DESI sky spectra
+vac = SkySpecVAC(version="v1.0", download=True)
+wavelength, flux, metadata = vac.load()
+
+# Load pre-trained VAE
+vae, meta = load_builtin("vae")
+
+# Encode a sky spectrum to latent representation
+spectrum = flux[0].squeeze()
+mean, logvar = vae.encode(spectrum)
+print(f"Latent mean: {mean}")  # Shape: (8,)
+
+# Sample and decode
+latent = vae.sample(mean, logvar, jr.PRNGKey(0))
+reconstructed = vae.decode(latent)
+print(f"Reconstructed shape: {reconstructed.shape}")  # Shape: (7781,)
+
+# Batch processing with vmap
+import jax
+batch_means, batch_logvars = jax.vmap(vae.encode)(flux.squeeze())
+print(f"Batch latents shape: {batch_means.shape}")  # Shape: (9176, 8)
+```
+
 ### Download and load DESI sky spectra data
 
 ```python
@@ -110,6 +141,7 @@ desisky.io.save(
 
 **Available models:**
 - `"broadband"` - Multi-layer perceptron for V, g, r, z magnitude prediction
+- `"vae"` - Variational autoencoder for sky spectra compression and analysis
 
 ## Data Download
 
@@ -160,7 +192,9 @@ desisky-data dir  # Shows /path/to/data
 
 See [examples/](examples/) directory for Jupyter notebooks demonstrating:
 
-- **Model inference** - Loading models and running predictions
+- **[00_quickstart.ipynb](examples/00_quickstart.ipynb)** - Quick introduction to desisky
+- **[01_broadband_training.ipynb](examples/01_broadband_training.ipynb)** - Training the broadband model
+- **[03_vae_inference.ipynb](examples/03_vae_inference.ipynb)** - VAE inference for encoding/decoding sky spectra
 - **Data visualization** - Plotting sky spectra and observing conditions
 - **Integration examples** - Using desisky with SpecSim
 
@@ -193,14 +227,24 @@ pytest tests/test_model_io.py -v
 ```
 desisky/
 ├── src/desisky/
-│   ├── io/           # Model I/O (save/load checkpoints)
-│   ├── models/       # Model architectures (broadband MLP, VAE, diffusion)
-│   ├── data/         # Data downloading and loading utilities
-│   ├── scripts/      # CLI tools (desisky-data)
-│   └── weights/      # Pre-trained model weights
-├── tests/            # Comprehensive test suite (36 tests)
-├── examples/         # Jupyter notebook examples
-└── pyproject.toml    # Package configuration
+│   ├── io/              # Model I/O (save/load checkpoints)
+│   ├── models/          # Model architectures
+│   │   ├── broadband.py # Broadband MLP for magnitude prediction
+│   │   └── vae.py       # Variational autoencoder for sky spectra
+│   ├── data/            # Data downloading and loading utilities
+│   ├── training/        # Training utilities and loss functions
+│   ├── visualization/   # Plotting utilities
+│   ├── scripts/         # CLI tools (desisky-data)
+│   └── weights/         # Pre-trained model weights
+├── tests/               # Comprehensive test suite (123 tests)
+│   ├── test_vae.py      # VAE unit tests (31 tests)
+│   ├── test_model_io.py # Model I/O tests
+│   └── ...              # Other test modules
+├── examples/            # Jupyter notebook examples
+│   ├── 00_quickstart.ipynb
+│   ├── 01_broadband_training.ipynb
+│   └── 03_vae_inference.ipynb
+└── pyproject.toml       # Package configuration
 ```
 
 ## License
