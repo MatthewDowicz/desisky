@@ -134,7 +134,16 @@ def test_packaged_load_via_registry(case, monkeypatch, tmp_path):
     This test manually registers the model (since we're using a temp directory
     instead of the real desisky.weights package). In production, models auto-register
     themselves on import (see broadband.py).
+
+    Note: Models in EXTERNAL_WEIGHTS (like VAE) are downloaded from external
+    storage, not loaded from package, so they're skipped here.
     """
+    from desisky.io.model_io import EXTERNAL_WEIGHTS
+
+    # Skip models that use external weights
+    if case.kind in EXTERNAL_WEIGHTS:
+        pytest.skip(f"{case.kind} uses external weights, not packaged")
+
     pkg_dir = tmp_path / "pkg"
     packaged = pkg_dir / case.resource
     model0 = case.constructor(**case.arch)
