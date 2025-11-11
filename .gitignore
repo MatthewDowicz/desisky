@@ -98,3 +98,4 @@ examples/tmp/
 # examples/outputs/
 # models/
 # weights/
+src/desisky/weights/vae_weights.eqx
