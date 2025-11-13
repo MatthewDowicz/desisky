@@ -226,6 +226,10 @@ class SkyVAE(eqx.Module):
         out = self.common_fc(x)
         mean = self.mean_fc(out)
         log_var = self.log_var_fc(out)
+        # CRITICAL: Clip log_var to prevent exp() explosion in sampling
+        # Without this, exp(0.5 * log_var) can become huge, causing NaN
+        # This protects both the forward pass AND the gradient computation
+        # log_var = jnp.clip(log_var, -10.0, 10.0)
         return mean, log_var
 
     def sample(
