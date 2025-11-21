@@ -182,6 +182,11 @@ EXTERNAL_WEIGHTS = {
         "url": "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/vae_weights.eqx",
         "sha256": "638948543d7c2dcadd42efbc62c9558f9f9779440aa97bd47220a3c91e42d607",
         "size_mb": 76.2,
+    },
+    "ldm_dark": {
+        "url": "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/ldm_dark.eqx",
+        "sha256": "bdc35965babe89276801596cd52db5530b5b2daaaeec559773e88cf36a98987d",
+        "size_mb": 4.4,
     }
 }
 
