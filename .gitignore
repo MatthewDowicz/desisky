@@ -98,4 +98,10 @@ examples/tmp/
 # examples/outputs/
 # models/
 # weights/
+
+# External model weights (downloaded from HuggingFace on first use)
 src/desisky/weights/vae_weights.eqx
+src/desisky/weights/ldm_dark.eqx
+
+# Solar flux data (can be downloaded or provided by user)
+src/desisky/data/solarflux-2004-2025.csv
