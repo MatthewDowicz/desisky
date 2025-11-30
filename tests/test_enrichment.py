@@ -158,6 +158,255 @@ class TestEclipseFractionComputation:
         assert np.all(result == 0)
 
 
+class TestSolarFluxAttachment:
+    """Tests for solar flux attachment functionality."""
+
+    def test_attach_solar_flux_basic(self):
+        """Test basic solar flux attachment."""
+        from desisky.data import attach_solar_flux
+
+        pytest.importorskip("pandas")
+
+        # Create fake metadata (MJD 59000 = 2020-05-31)
+        metadata = pd.DataFrame({
+            'MJD': np.array([59000.0, 59001.0, 59002.0]),
+            'EXPID': [1, 2, 3]
+        })
+
+        # Create fake solar flux data matching the MJD dates
+        solar_df = pd.DataFrame({
+            'datetime': pd.to_datetime(['2020-05-31', '2020-06-01', '2020-06-02']),
+            'fluxobsflux': [150.0, 155.0, 160.0]
+        })
+
+        result = attach_solar_flux(metadata, solar_df, verbose=False)
+
+        assert 'SOLFLUX' in result.columns
+        assert len(result) == 3
+        assert result['SOLFLUX'].notna().all()
+        assert result['EXPID'].tolist() == [1, 2, 3]
+
+    def test_attach_solar_flux_preserves_data(self):
+        """Test that original metadata columns are preserved."""
+        from desisky.data import attach_solar_flux
+
+        pytest.importorskip("pandas")
+
+        metadata = pd.DataFrame({
+            'MJD': [59000.0, 59001.0],
+            'EXPID': [1, 2],
+            'TILERA': [150.0, 160.0],
+            'TILEDEC': [30.0, 35.0]
+        })
+
+        solar_df = pd.DataFrame({
+            'datetime': pd.to_datetime(['2020-05-31', '2020-06-01']),
+            'fluxobsflux': [150.0, 155.0]
+        })
+
+        result = attach_solar_flux(metadata, solar_df, verbose=False)
+
+        # Check original columns preserved
+        assert 'TILERA' in result.columns
+        assert 'TILEDEC' in result.columns
+        assert result['TILERA'].tolist() == [150.0, 160.0]
+        assert result['TILEDEC'].tolist() == [30.0, 35.0]
+
+    def test_attach_solar_flux_no_mutation(self):
+        """Test that original dataframes are not mutated."""
+        from desisky.data import attach_solar_flux
+
+        pytest.importorskip("pandas")
+
+        metadata = pd.DataFrame({
+            'MJD': [59000.0, 59001.0],
+            'EXPID': [1, 2]
+        })
+
+        solar_df = pd.DataFrame({
+            'datetime': pd.to_datetime(['2020-05-31', '2020-06-01']),
+            'fluxobsflux': [150.0, 155.0]
+        })
+
+        # Store original lengths
+        orig_meta_cols = set(metadata.columns)
+        orig_solar_cols = set(solar_df.columns)
+
+        result = attach_solar_flux(metadata, solar_df, verbose=False)
+
+        # Originals should be unchanged
+        assert set(metadata.columns) == orig_meta_cols
+        assert set(solar_df.columns) == orig_solar_cols
+        assert 'SOLFLUX' not in metadata.columns
+
+    def test_attach_solar_flux_with_gaps(self):
+        """Test handling of time gaps beyond tolerance."""
+        from desisky.data import attach_solar_flux
+
+        pytest.importorskip("pandas")
+
+        # Observations far from solar flux measurements
+        metadata = pd.DataFrame({
+            'MJD': [59000.0, 59010.0]  # 10 days apart (2020-05-31 and 2020-06-10)
+        })
+
+        # Solar flux only on day 59000 (2020-05-31)
+        solar_df = pd.DataFrame({
+            'datetime': pd.to_datetime(['2020-05-31']),
+            'fluxobsflux': [150.0]
+        })
+
+        # With 1-day tolerance, second observation should have NaN
+        result = attach_solar_flux(metadata, solar_df, time_tolerance="1D", verbose=False)
+
+        assert result['SOLFLUX'].notna().sum() == 1
+        assert result['SOLFLUX'].isna().sum() == 1
+
+
+class TestGalacticCoordinates:
+    """Tests for Galactic coordinate transformation."""
+
+    def test_add_galactic_coordinates_basic(self):
+        """Test basic Galactic coordinate addition."""
+        from desisky.data import add_galactic_coordinates
+
+        pytest.importorskip("astropy")
+
+        metadata = pd.DataFrame({
+            'TILERA': [0.0, 90.0, 180.0],
+            'TILEDEC': [0.0, 0.0, 0.0]
+        })
+
+        result = add_galactic_coordinates(metadata)
+
+        assert 'GALLON' in result.columns
+        assert 'GALLAT' in result.columns
+        assert len(result) == 3
+        assert result['GALLON'].notna().all()
+        assert result['GALLAT'].notna().all()
+
+    def test_galactic_coordinates_range(self):
+        """Test that Galactic coordinates are in valid ranges."""
+        from desisky.data import add_galactic_coordinates
+
+        pytest.importorskip("astropy")
+
+        metadata = pd.DataFrame({
+            'TILERA': np.linspace(0, 360, 20),
+            'TILEDEC': np.linspace(-90, 90, 20)
+        })
+
+        result = add_galactic_coordinates(metadata)
+
+        # Galactic longitude: 0-360
+        assert (result['GALLON'] >= 0).all()
+        assert (result['GALLON'] <= 360).all()
+
+        # Galactic latitude: -90 to 90
+        assert (result['GALLAT'] >= -90).all()
+        assert (result['GALLAT'] <= 90).all()
+
+    def test_galactic_coordinates_no_mutation(self):
+        """Test that original metadata is not mutated."""
+        from desisky.data import add_galactic_coordinates
+
+        pytest.importorskip("astropy")
+
+        metadata = pd.DataFrame({
+            'TILERA': [150.0],
+            'TILEDEC': [30.0]
+        })
+
+        orig_cols = set(metadata.columns)
+        result = add_galactic_coordinates(metadata)
+
+        # Original unchanged
+        assert set(metadata.columns) == orig_cols
+        assert 'GALLON' not in metadata.columns
+
+
+class TestEclipticCoordinates:
+    """Tests for Ecliptic coordinate transformation."""
+
+    def test_add_ecliptic_coordinates_basic(self):
+        """Test basic Ecliptic coordinate addition."""
+        from desisky.data import add_ecliptic_coordinates
+
+        pytest.importorskip("astropy")
+
+        metadata = pd.DataFrame({
+            'TILERA': [0.0, 90.0, 180.0],
+            'TILEDEC': [0.0, 0.0, 0.0]
+        })
+
+        result = add_ecliptic_coordinates(metadata)
+
+        assert 'ECLLON' in result.columns
+        assert 'ECLLAT' in result.columns
+        assert len(result) == 3
+        assert result['ECLLON'].notna().all()
+        assert result['ECLLAT'].notna().all()
+
+    def test_ecliptic_coordinates_range(self):
+        """Test that Ecliptic coordinates are in valid ranges."""
+        from desisky.data import add_ecliptic_coordinates
+
+        pytest.importorskip("astropy")
+
+        metadata = pd.DataFrame({
+            'TILERA': np.linspace(0, 360, 20),
+            'TILEDEC': np.linspace(-90, 90, 20)
+        })
+
+        result = add_ecliptic_coordinates(metadata)
+
+        # Ecliptic longitude: 0-360
+        assert (result['ECLLON'] >= 0).all()
+        assert (result['ECLLON'] <= 360).all()
+
+        # Ecliptic latitude: -90 to 90
+        assert (result['ECLLAT'] >= -90).all()
+        assert (result['ECLLAT'] <= 90).all()
+
+    def test_ecliptic_geocentric_default(self):
+        """Test that geocentric frame works correctly."""
+        from desisky.data import add_ecliptic_coordinates
+
+        pytest.importorskip("astropy")
+
+        metadata = pd.DataFrame({
+            'TILERA': [150.0],
+            'TILEDEC': [30.0]
+        })
+
+        geo = add_ecliptic_coordinates(metadata)
+
+        # Should have ecliptic coordinates
+        assert 'ECLLON' in geo.columns
+        assert 'ECLLAT' in geo.columns
+        assert geo['ECLLON'].notna().all()
+        assert geo['ECLLAT'].notna().all()
+
+
+    def test_ecliptic_coordinates_no_mutation(self):
+        """Test that original metadata is not mutated."""
+        from desisky.data import add_ecliptic_coordinates
+
+        pytest.importorskip("astropy")
+
+        metadata = pd.DataFrame({
+            'TILERA': [150.0],
+            'TILEDEC': [30.0]
+        })
+
+        orig_cols = set(metadata.columns)
+        result = add_ecliptic_coordinates(metadata)
+
+        # Original unchanged
+        assert set(metadata.columns) == orig_cols
+        assert 'ECLLON' not in metadata.columns
+
+
 class TestSkySpecVACEnrichment:
     """Tests for SkySpecVAC enrichment functionality."""
 
