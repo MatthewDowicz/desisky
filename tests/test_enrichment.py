@@ -262,6 +262,41 @@ class TestSolarFluxAttachment:
         assert result['SOLFLUX'].notna().sum() == 1
         assert result['SOLFLUX'].isna().sum() == 1
 
+    def test_load_solar_flux(self):
+        """Test load_solar_flux downloads and loads data correctly."""
+        from desisky.data import load_solar_flux
+
+        pytest.importorskip("pandas")
+
+        # This will download from HuggingFace on first run, or use cached version
+        solar_df = load_solar_flux(download=True, verify=True)
+
+        # Check structure
+        assert 'datetime' in solar_df.columns
+        assert 'fluxobsflux' in solar_df.columns
+        assert len(solar_df) > 0
+
+        # Check that datetime column is parsed correctly
+        assert solar_df['datetime'].dtype.name.startswith('datetime')
+
+    def test_attach_solar_flux_auto_download(self):
+        """Test that attach_solar_flux auto-downloads data if not provided."""
+        from desisky.data import attach_solar_flux
+
+        pytest.importorskip("pandas")
+
+        metadata = pd.DataFrame({
+            'MJD': [59000.0, 59001.0],
+            'EXPID': [1, 2]
+        })
+
+        # Don't provide solar_flux_df - should auto-download
+        result = attach_solar_flux(metadata, solar_flux_df=None, verbose=False)
+
+        # Should have SOLFLUX column
+        assert 'SOLFLUX' in result.columns
+        assert len(result) == 2
+
 
 class TestGalacticCoordinates:
     """Tests for Galactic coordinate transformation."""
