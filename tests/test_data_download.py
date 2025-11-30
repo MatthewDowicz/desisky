@@ -393,6 +393,12 @@ def test_data_module_exports_all_expected_symbols():
         "default_root",
         "download_file",
         "sha256sum",
+        "compute_vband_magnitudes",
+        "load_eclipse_catalog",
+        "compute_eclipse_fraction",
+        "attach_solar_flux",
+        "add_galactic_coordinates",
+        "add_ecliptic_coordinates",
     ]
 
     for symbol in expected_exports:
@@ -404,7 +410,7 @@ def test_data_module_all_matches_exports():
     from desisky import data
 
     assert hasattr(data, "__all__")
-    assert len(data.__all__) == 7
+    assert len(data.__all__) == 13  # Updated from 7 to include enrichment functions
 
     for symbol in data.__all__:
         assert hasattr(data, symbol), f"__all__ contains {symbol} but it's not exported"
