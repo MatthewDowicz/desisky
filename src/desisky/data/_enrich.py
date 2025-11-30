@@ -301,13 +301,97 @@ def _check_observability(obs_mjd: float) -> bool:
     return moon_alt > 5.0
 
 
+# -------------------------
+# Solar flux data configuration
+# -------------------------
+
+SOLAR_FLUX_URL = "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/solarflux-2004-2025.csv"
+SOLAR_FLUX_SHA256 = "6d68f5e5ca104de5f342a670e298a26e8b8f4031bab9541c9b3474275dc89ac0"
+
+
+def load_solar_flux(download: bool = True, verify: bool = True) -> "pd.DataFrame":
+    """
+    Load daily 10.7 cm solar flux measurements (2004-2025).
+
+    Solar flux data is downloaded on first use from HuggingFace and cached locally
+    in ``~/.desisky/data/auxiliary/``. The cached file persists across sessions.
+
+    Parameters
+    ----------
+    download : bool, default True
+        If True and data file doesn't exist, download it automatically
+    verify : bool, default True
+        If True, verify SHA-256 checksum (when available)
+
+    Returns
+    -------
+    pd.DataFrame
+        Solar flux data with columns:
+        - datetime: UTC datetime of measurement
+        - fluxobsflux: Observed 10.7 cm solar flux (sfu)
+
+    Raises
+    ------
+    FileNotFoundError
+        If file doesn't exist and download=False
+    ImportError
+        If pandas is not installed
+
+    Examples
+    --------
+    >>> from desisky.data import load_solar_flux
+    >>> solar_df = load_solar_flux()  # Downloads on first use
+    >>> print(solar_df.head())
+
+    Notes
+    -----
+    Solar flux units are in solar flux units (sfu): 10^-22 W·m^-2·Hz^-1
+    """
+    try:
+        import pandas as pd
+    except ImportError as e:
+        raise ImportError(
+            "pandas is required for solar flux data. "
+            "Install with: pip install pandas"
+        ) from e
+
+    # Use auxiliary data directory
+    cache_dir = default_root() / "auxiliary"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    filepath = cache_dir / "solarflux-2004-2025.csv"
+
+    # Download if needed
+    if not filepath.exists():
+        if not download:
+            raise FileNotFoundError(
+                f"Solar flux data not found at {filepath}.\n"
+                f"Set download=True to download automatically."
+            )
+        print(f"Downloading solar flux data (first time only)...")
+        print(f"Source: {SOLAR_FLUX_URL}")
+        download_file(
+            url=SOLAR_FLUX_URL,
+            dest=filepath,
+            expected_sha256=SOLAR_FLUX_SHA256 if verify else None,
+            timeout=120
+        )
+        print(f"✓ Solar flux data cached at {filepath}")
+
+    # Load CSV
+    solar_df = pd.read_csv(filepath)
+    solar_df['datetime'] = pd.to_datetime(solar_df['datetime'])
+
+    return solar_df
+
+
 def attach_solar_flux(
     metadata: "pd.DataFrame",
-    solar_flux_df: "pd.DataFrame",
+    solar_flux_df: "pd.DataFrame | None" = None,
     mjd_col: str = "MJD",
     solar_time_col: str = "datetime",
     solar_flux_col: str = "fluxobsflux",
     time_tolerance: str = "12H",
+    download: bool = True,
     verbose: bool = True
 ) -> "pd.DataFrame":
     """
@@ -317,12 +401,16 @@ def attach_solar_flux(
     daily 10.7 cm solar flux measurements. The solar flux is a key space weather indicator
     that affects atmospheric properties and can influence sky brightness.
 
+    If ``solar_flux_df`` is not provided, the data will be automatically loaded (and
+    downloaded if necessary) using :func:`load_solar_flux`.
+
     Parameters
     ----------
     metadata : pd.DataFrame
         DESI observation metadata (one row per exposure). Must contain MJD column.
-    solar_flux_df : pd.DataFrame
-        Daily solar flux measurements. Must contain datetime and flux columns.
+    solar_flux_df : pd.DataFrame | None, default None
+        Daily solar flux measurements. If None, data is loaded automatically.
+        Must contain datetime and flux columns if provided.
     mjd_col : str, default "MJD"
         Column name for Modified Julian Date in metadata
     solar_time_col : str, default "datetime"
@@ -331,6 +419,8 @@ def attach_solar_flux(
         Column name for solar flux values in solar_flux_df
     time_tolerance : str, default "12H"
         Maximum time separation for valid matches (pandas Timedelta format)
+    download : bool, default True
+        If True and solar_flux_df is None, download data if not cached
     verbose : bool, default True
         If True, print matching statistics
 
@@ -341,23 +431,26 @@ def attach_solar_flux(
 
     Examples
     --------
-    >>> import pandas as pd
     >>> from desisky.data import attach_solar_flux
     >>>
-    >>> # Load solar flux data
-    >>> solar_df = pd.read_csv('solarflux-2004-2025.csv')
-    >>> solar_df['datetime'] = pd.to_datetime(solar_df['datetime'])
+    >>> # Simple usage - auto-loads data
+    >>> metadata = attach_solar_flux(metadata)
+    Downloading solar flux data (first time only)...
+    ✓ Solar flux data cached at ~/.desisky/data/auxiliary/solarflux-2004-2025.csv
+    Matched solar-flux values for 9170 / 9176 exposures (tolerance = 12H).
     >>>
-    >>> # Attach to metadata
-    >>> metadata = attach_solar_flux(metadata, solar_df, time_tolerance="12h")
-    Matched solar-flux values for 9170 / 9176 exposures (tolerance = 12h).
+    >>> # Or provide your own DataFrame
+    >>> import pandas as pd
+    >>> solar_df = pd.read_csv('custom_solar_flux.csv')
+    >>> solar_df['datetime'] = pd.to_datetime(solar_df['datetime'])
+    >>> metadata = attach_solar_flux(metadata, solar_df, time_tolerance="6h")
 
     Notes
     -----
     - Uses pandas merge_asof for efficient nearest-time matching
     - Returns a copy; original metadata is not modified
     - Unmatched exposures will have NaN in SOLFLUX column
-    - Solar flux units are typically in solar flux units (sfu): 10^-22 W·m^-2·Hz^-1
+    - Solar flux units are in solar flux units (sfu): 10^-22 W·m^-2·Hz^-1
     """
     try:
         import pandas as pd
@@ -366,6 +459,10 @@ def attach_solar_flux(
             "pandas is required for solar flux enrichment. "
             "Install with: pip install pandas"
         ) from e
+
+    # Auto-load solar flux data if not provided
+    if solar_flux_df is None:
+        solar_flux_df = load_solar_flux(download=download, verify=True)
 
     # Make copies to avoid mutating originals
     meta = metadata.copy()
