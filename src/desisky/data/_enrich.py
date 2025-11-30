@@ -299,3 +299,241 @@ def _check_observability(obs_mjd: float) -> bool:
     # Check Moon > 5 deg above horizon
     moon_alt = get_body('moon', t, location=KITT_PEAK).transform_to(altaz_frame).alt.deg
     return moon_alt > 5.0
+
+
+def attach_solar_flux(
+    metadata: "pd.DataFrame",
+    solar_flux_df: "pd.DataFrame",
+    mjd_col: str = "MJD",
+    solar_time_col: str = "datetime",
+    solar_flux_col: str = "fluxobsflux",
+    time_tolerance: str = "12H",
+    verbose: bool = True
+) -> "pd.DataFrame":
+    """
+    Add or update SOLFLUX column in metadata using nearest daily solar flux measurements.
+
+    This function performs a nearest-time merge between DESI observation metadata and
+    daily 10.7 cm solar flux measurements. The solar flux is a key space weather indicator
+    that affects atmospheric properties and can influence sky brightness.
+
+    Parameters
+    ----------
+    metadata : pd.DataFrame
+        DESI observation metadata (one row per exposure). Must contain MJD column.
+    solar_flux_df : pd.DataFrame
+        Daily solar flux measurements. Must contain datetime and flux columns.
+    mjd_col : str, default "MJD"
+        Column name for Modified Julian Date in metadata
+    solar_time_col : str, default "datetime"
+        Column name for datetime in solar_flux_df
+    solar_flux_col : str, default "fluxobsflux"
+        Column name for solar flux values in solar_flux_df
+    time_tolerance : str, default "12H"
+        Maximum time separation for valid matches (pandas Timedelta format)
+    verbose : bool, default True
+        If True, print matching statistics
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of metadata with updated SOLFLUX column
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from desisky.data import attach_solar_flux
+    >>>
+    >>> # Load solar flux data
+    >>> solar_df = pd.read_csv('solarflux-2004-2025.csv')
+    >>> solar_df['datetime'] = pd.to_datetime(solar_df['datetime'])
+    >>>
+    >>> # Attach to metadata
+    >>> metadata = attach_solar_flux(metadata, solar_df, time_tolerance="12h")
+    Matched solar-flux values for 9170 / 9176 exposures (tolerance = 12h).
+
+    Notes
+    -----
+    - Uses pandas merge_asof for efficient nearest-time matching
+    - Returns a copy; original metadata is not modified
+    - Unmatched exposures will have NaN in SOLFLUX column
+    - Solar flux units are typically in solar flux units (sfu): 10^-22 W·m^-2·Hz^-1
+    """
+    try:
+        import pandas as pd
+    except ImportError as e:
+        raise ImportError(
+            "pandas is required for solar flux enrichment. "
+            "Install with: pip install pandas"
+        ) from e
+
+    # Make copies to avoid mutating originals
+    meta = metadata.copy()
+    sol = solar_flux_df[[solar_time_col, solar_flux_col]].dropna().copy()
+
+    # Convert MJD to datetime (UTC)
+    meta["datetime"] = pd.to_datetime(
+        meta[mjd_col],
+        origin="1858-11-17",
+        unit="D"
+    )
+
+    # Sort for merge_asof (required)
+    meta.sort_values("datetime", inplace=True)
+    sol.sort_values(solar_time_col, inplace=True)
+
+    # Nearest-time merge
+    merged = pd.merge_asof(
+        meta,
+        sol,
+        left_on="datetime",
+        right_on=solar_time_col,
+        direction="nearest",
+        tolerance=pd.Timedelta(time_tolerance)
+    )
+
+    # Statistics
+    n_total = len(merged)
+    n_unmatched = merged[solar_flux_col].isna().sum()
+    if verbose:
+        print(
+            f"Matched solar-flux values for {n_total - n_unmatched} / {n_total} "
+            f"exposures (tolerance = {time_tolerance})."
+        )
+
+    # Update SOLFLUX column and cleanup
+    merged["SOLFLUX"] = merged[solar_flux_col]
+    merged.drop(columns=[solar_flux_col, "datetime"], inplace=True)
+
+    return merged
+
+
+def add_galactic_coordinates(
+    metadata: "pd.DataFrame",
+    ra_col: str = "TILERA",
+    dec_col: str = "TILEDEC"
+) -> "pd.DataFrame":
+    """
+    Add Galactic coordinates (GALLON, GALLAT) to metadata.
+
+    Converts ICRS (RA/Dec) coordinates to Galactic coordinates (l, b). Galactic
+    coordinates are useful for studying the Integrated Starlight (ISL) contribution
+    to sky brightness, which varies with position relative to the Galactic plane.
+
+    Parameters
+    ----------
+    metadata : pd.DataFrame
+        Observation metadata with RA and Dec columns
+    ra_col : str, default "TILERA"
+        Column name for Right Ascension (degrees)
+    dec_col : str, default "TILEDEC"
+        Column name for Declination (degrees)
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of metadata with added GALLON and GALLAT columns
+
+    Examples
+    --------
+    >>> from desisky.data import add_galactic_coordinates
+    >>> metadata = add_galactic_coordinates(metadata)
+    >>> print(metadata[['TILERA', 'TILEDEC', 'GALLON', 'GALLAT']].head())
+
+    Notes
+    -----
+    - GALLON: Galactic longitude ℓ (0-360 degrees)
+    - GALLAT: Galactic latitude b (-90 to +90 degrees)
+    - Uses astropy.coordinates for transformation
+    - Returns a copy; original metadata is not modified
+    """
+    try:
+        from astropy.coordinates import SkyCoord
+        from astropy import units as u
+    except ImportError as e:
+        raise ImportError(
+            "astropy is required for coordinate transformations. "
+            "Install with: pip install astropy"
+        ) from e
+
+    meta = metadata.copy()
+
+    # Convert to Galactic coordinates
+    coords_icrs = SkyCoord(
+        ra=meta[ra_col].values * u.deg,
+        dec=meta[dec_col].values * u.deg,
+        frame='icrs'
+    )
+    gal = coords_icrs.galactic
+
+    meta["GALLON"] = gal.l.deg  # Galactic longitude ℓ
+    meta["GALLAT"] = gal.b.deg  # Galactic latitude b
+
+    return meta
+
+
+def add_ecliptic_coordinates(
+    metadata: "pd.DataFrame",
+    ra_col: str = "TILERA",
+    dec_col: str = "TILEDEC"
+) -> "pd.DataFrame":
+    """
+    Add Ecliptic coordinates (ECLLON, ECLLAT) to metadata.
+
+    Converts ICRS (RA/Dec) coordinates to geocentric ecliptic coordinates (λ, β).
+    Ecliptic coordinates are useful for modeling zodiacal light, which is
+    concentrated along the ecliptic plane.
+
+    Parameters
+    ----------
+    metadata : pd.DataFrame
+        Observation metadata with RA and Dec columns
+    ra_col : str, default "TILERA"
+        Column name for Right Ascension (degrees)
+    dec_col : str, default "TILEDEC"
+        Column name for Declination (degrees)
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of metadata with added ECLLON and ECLLAT columns
+
+    Examples
+    --------
+    >>> from desisky.data import add_ecliptic_coordinates
+    >>> metadata = add_ecliptic_coordinates(metadata)
+    >>> print(metadata[['TILERA', 'TILEDEC', 'ECLLON', 'ECLLAT']].head())
+
+    Notes
+    -----
+    - ECLLON: Ecliptic longitude λ (0-360 degrees)
+    - ECLLAT: Ecliptic latitude β (-90 to +90 degrees)
+    - Uses geocentric ecliptic frame (Earth-centered, suitable for zodiacal light)
+    - Uses astropy.coordinates for transformation
+    - Returns a copy; original metadata is not modified
+    """
+    try:
+        from astropy.coordinates import SkyCoord, GeocentricTrueEcliptic
+        from astropy import units as u
+    except ImportError as e:
+        raise ImportError(
+            "astropy is required for coordinate transformations. "
+            "Install with: pip install astropy"
+        ) from e
+
+    meta = metadata.copy()
+
+    # Convert to ICRS
+    coords_icrs = SkyCoord(
+        ra=meta[ra_col].values * u.deg,
+        dec=meta[dec_col].values * u.deg,
+        frame='icrs'
+    )
+
+    # Transform to geocentric ecliptic
+    ecliptic = coords_icrs.transform_to(GeocentricTrueEcliptic())
+
+    meta["ECLLON"] = ecliptic.lon.deg  # Ecliptic longitude λ
+    meta["ECLLAT"] = ecliptic.lat.deg  # Ecliptic latitude β
+
+    return meta
