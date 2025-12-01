@@ -576,3 +576,112 @@ class TestSkySpecVACEnrichment:
             # Should warn about enrichment requiring DataFrame
             assert len(w) > 0
             assert "as_dataframe=True" in str(w[0].message)
+
+    def test_load_dark_time_filtering(self):
+        """Test dark time subset filtering criteria."""
+        from desisky.data import SkySpecVAC
+
+        pytest.importorskip("speclite")
+        pytest.importorskip("astropy")
+
+        vac = SkySpecVAC(version="v1.0", download=False)
+        wave, flux, meta = vac.load_dark_time()
+
+        # Should be a subset
+        assert len(meta) < 9176
+        assert len(meta) > 0
+
+        # Verify filtering criteria
+        assert (meta['SUNALT'] < -20).all(), "Dark time requires SUNALT < -20"
+        assert (meta['MOONALT'] < -5).all(), "Dark time requires MOONALT < -5"
+        assert (meta['TRANSPARENCY_GFA'] > 0).all(), "Dark time requires valid transparency"
+
+        # Verify enrichment by default
+        assert 'SKY_MAG_V_SPEC' in meta.columns, "Dark time should be enriched by default"
+        assert 'ECLIPSE_FRAC' in meta.columns, "Dark time should include eclipse fraction"
+
+        # Verify data integrity
+        assert flux.shape[0] == len(meta), "Flux and metadata should match"
+        assert flux.shape[1] == len(wave), "Flux should match wavelength dimension"
+
+    def test_load_sun_contaminated_filtering(self):
+        """Test sun contaminated subset filtering criteria."""
+        from desisky.data import SkySpecVAC
+
+        pytest.importorskip("speclite")
+        pytest.importorskip("astropy")
+
+        vac = SkySpecVAC(version="v1.0", download=False)
+        wave, flux, meta = vac.load_sun_contaminated()
+
+        # Should be a subset
+        assert len(meta) < 9176
+        assert len(meta) > 0
+
+        # Verify filtering criteria
+        assert (meta['SUNALT'] > -20).all(), "Sun contaminated requires SUNALT > -20"
+        assert (meta['MOONALT'] <= -5).all(), "Sun contaminated requires MOONALT <= -5"
+        assert (meta['MOONSEP'] <= 110).all(), "Sun contaminated requires MOONSEP <= 110"
+        assert (meta['TRANSPARENCY_GFA'] > 0).all(), "Sun contaminated requires valid transparency"
+
+        # Verify enrichment
+        assert 'SKY_MAG_V_SPEC' in meta.columns
+        assert 'ECLIPSE_FRAC' in meta.columns
+
+        # Verify data integrity
+        assert flux.shape[0] == len(meta)
+        assert flux.shape[1] == len(wave)
+
+    def test_load_dark_time_without_enrichment(self):
+        """Test dark time subset can be loaded without enrichment."""
+        from desisky.data import SkySpecVAC
+
+        vac = SkySpecVAC(version="v1.0", download=False)
+        wave, flux, meta = vac.load_dark_time(enrich=False)
+
+        # Should still be filtered
+        assert len(meta) < 9176
+        assert (meta['SUNALT'] < -20).all()
+
+        # Should NOT have enriched columns
+        assert 'SKY_MAG_V_SPEC' not in meta.columns
+        assert 'ECLIPSE_FRAC' not in meta.columns
+
+    def test_subset_sizes_reasonable(self):
+        """Test that subset sizes are reasonable and mutually exclusive where expected."""
+        from desisky.data import SkySpecVAC
+
+        vac = SkySpecVAC(version="v1.0", download=False)
+
+        _, _, meta_dark = vac.load_dark_time(enrich=False)
+        _, _, meta_sun = vac.load_sun_contaminated(enrich=False)
+        _, _, meta_moon = vac.load_moon_contaminated(enrich=False)
+
+        # All should be non-empty
+        assert len(meta_dark) > 0, "Dark time subset should not be empty"
+        assert len(meta_sun) > 0, "Sun contaminated subset should not be empty"
+        assert len(meta_moon) > 0, "Moon contaminated subset should not be empty"
+
+        # Dark and sun are mutually exclusive by SUNALT
+        # (Dark: SUNALT < -20, Sun: SUNALT > -20)
+        assert len(meta_dark) + len(meta_sun) < 9176, "Dark and sun subsets should not cover all data"
+
+        # Dark and moon can overlap in principle (both have SUNALT < -20)
+        # but moon requires MOONALT > 5, dark requires MOONALT < -5, so they're exclusive
+        # Total should be reasonable
+        total = len(meta_dark) + len(meta_sun) + len(meta_moon)
+        assert total < 9176 * 1.5, "Total subset sizes should be reasonable"
+
+    def test_subset_wavelength_consistency(self):
+        """Test that all subsets return the same wavelength array."""
+        from desisky.data import SkySpecVAC
+
+        vac = SkySpecVAC(version="v1.0", download=False)
+
+        wave_dark, _, _ = vac.load_dark_time(enrich=False)
+        wave_sun, _, _ = vac.load_sun_contaminated(enrich=False)
+        wave_moon, _, _ = vac.load_moon_contaminated(enrich=False)
+
+        assert np.array_equal(wave_dark, wave_sun), "Wavelength arrays should be identical"
+        assert np.array_equal(wave_dark, wave_moon), "Wavelength arrays should be identical"
+        assert len(wave_dark) == 7781, "Wavelength array should have 7781 points"
