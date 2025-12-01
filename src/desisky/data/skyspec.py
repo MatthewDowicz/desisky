@@ -149,9 +149,17 @@ class SkySpecVAC:
     >>> print('SKY_MAG_V_SPEC' in meta.columns)  # True (v1.0 only)
     >>> print('ECLIPSE_FRAC' in meta.columns)  # True (v1.0 only)
     >>>
-    >>> # Load moon-contaminated subset (for broadband model)
+    >>> # Load dark-time subset (non-contaminated)
+    >>> wave, flux, meta = vac.load_dark_time()
+    >>> print(f"Dark-time: {len(meta)} observations")
+    >>>
+    >>> # Load sun-contaminated subset (twilight)
+    >>> wave, flux, meta = vac.load_sun_contaminated()
+    >>> print(f"Sun-contaminated: {len(meta)} observations")
+    >>>
+    >>> # Load moon-contaminated subset
     >>> wave, flux, meta = vac.load_moon_contaminated()
-    >>> print(len(meta))  # Subset with moon contamination
+    >>> print(f"Moon-contaminated: {len(meta)} observations")
 
     Raises
     ------
@@ -295,6 +303,100 @@ class SkySpecVAC:
 
         return wavelength, flux, metadata
 
+    def load_dark_time(self, *, enrich: bool = True):
+        """
+        Load subset of non-contaminated (dark time) observations.
+
+        This method filters for observations with minimal contamination from
+        moon and sun, suitable for training dark-time sky models:
+        - SUNALT < -20 (Sun well below horizon)
+        - MOONALT < -5 (Moon below horizon)
+        - TRANSPARENCY_GFA > 0 (valid transparency measurements)
+
+        Parameters
+        ----------
+        enrich : bool, default True
+            If True, add computed columns (SKY_MAG_V_SPEC, ECLIPSE_FRAC).
+
+        Returns
+        -------
+        wavelength : np.ndarray
+            1D array of wavelengths (same for all observations).
+        flux : np.ndarray
+            2D array of flux values for dark-time subset.
+        metadata : pd.DataFrame
+            Metadata for dark-time subset with reset index.
+
+        Examples
+        --------
+        >>> vac = SkySpecVAC(download=True)
+        >>> wave, flux, meta = vac.load_dark_time()
+        >>> print(f"Dark-time: {len(meta)} observations")
+        """
+        # Load full dataset with enrichment
+        wavelength, flux, metadata = self.load(as_dataframe=True, enrich=enrich)
+
+        # Apply dark time filter
+        dark_mask = (
+            (metadata['SUNALT'] < -20) &
+            (metadata['MOONALT'] < -5) &
+            (metadata['TRANSPARENCY_GFA'] > 0)
+        )
+
+        # Subset data
+        flux_subset = flux[dark_mask]
+        meta_subset = metadata[dark_mask].reset_index(drop=True)
+
+        return wavelength, flux_subset, meta_subset
+
+    def load_sun_contaminated(self, *, enrich: bool = True):
+        """
+        Load subset of sun-contaminated (twilight) observations.
+
+        This method filters for observations with significant sun contamination,
+        suitable for training twilight sky models:
+        - SUNALT > -20 (Sun near or above horizon - twilight)
+        - MOONALT <= -5 (Moon below horizon to exclude moon contamination)
+        - MOONSEP <= 110 (Sun-Moon separation constraint)
+        - TRANSPARENCY_GFA > 0 (valid transparency measurements)
+
+        Parameters
+        ----------
+        enrich : bool, default True
+            If True, add computed columns (SKY_MAG_V_SPEC, ECLIPSE_FRAC).
+
+        Returns
+        -------
+        wavelength : np.ndarray
+            1D array of wavelengths (same for all observations).
+        flux : np.ndarray
+            2D array of flux values for sun-contaminated subset.
+        metadata : pd.DataFrame
+            Metadata for sun-contaminated subset with reset index.
+
+        Examples
+        --------
+        >>> vac = SkySpecVAC(download=True)
+        >>> wave, flux, meta = vac.load_sun_contaminated()
+        >>> print(f"Sun-contaminated: {len(meta)} observations")
+        """
+        # Load full dataset with enrichment
+        wavelength, flux, metadata = self.load(as_dataframe=True, enrich=enrich)
+
+        # Apply sun contamination filter
+        sun_mask = (
+            (metadata['SUNALT'] > -20) &
+            (metadata['MOONALT'] <= -5) &
+            (metadata['MOONSEP'] <= 110) &
+            (metadata['TRANSPARENCY_GFA'] > 0)
+        )
+
+        # Subset data
+        flux_subset = flux[sun_mask]
+        meta_subset = metadata[sun_mask].reset_index(drop=True)
+
+        return wavelength, flux_subset, meta_subset
+
     def load_moon_contaminated(self, *, enrich: bool = True):
         """
         Load subset of observations with significant moon contamination.
@@ -328,7 +430,7 @@ class SkySpecVAC:
         --------
         >>> vac = SkySpecVAC(download=True)
         >>> wave, flux, meta = vac.load_moon_contaminated()
-        >>> print(f"Moon-contaminated: {len(meta)} / 9176 observations")
+        >>> print(f"Moon-contaminated: {len(meta)} observations")
         """
         # Load full dataset with enrichment
         wavelength, flux, metadata = self.load(as_dataframe=True, enrich=enrich)
