@@ -13,6 +13,13 @@ from .vae_losses import (
     default_kernel_sigma,
 )
 from .vae_trainer import VAETrainer, VAETrainingConfig, VAETrainingHistory
+from .ldm_trainer import (
+    LatentDiffusionTrainer,
+    LDMTrainingConfig,
+    LDMTrainingHistory,
+    cosine_beta_schedule,
+    diffusion_loss,
+)
 
 __all__ = [
     # Dataset utilities
@@ -34,4 +41,10 @@ __all__ = [
     "VAETrainer",
     "VAETrainingConfig",
     "VAETrainingHistory",
+    # LDM training
+    "LatentDiffusionTrainer",
+    "LDMTrainingConfig",
+    "LDMTrainingHistory",
+    "cosine_beta_schedule",
+    "diffusion_loss",
 ]
