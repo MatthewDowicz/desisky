@@ -11,7 +11,9 @@
 
 1. **Predictive broadband model** - Predicts surface brightness in V, g, r, and z photometric bands from observational metadata (moon position, transparency, eclipse fraction)
 2. **Variational Autoencoder (VAE)** - Compresses sky spectra (7,781 wavelength points → 8-dimensional latent space) for analysis, anomaly detection, and dimensionality reduction
-3. **Latent Diffusion Model (LDM)** - Generates realistic dark-time night-sky emission spectra conditioned on observational parameters (sun/moon positions, transparency, galactic/ecliptic coordinates, solar flux)
+3. **Latent Diffusion Models (LDM)** - Generates realistic night-sky emission spectra conditioned on observational parameters:
+   - **LDM Dark** - Dark-time spectra conditioned on sun position, transparency, galactic/ecliptic coordinates, and solar flux
+   - **LDM Moon** - Moon-contaminated spectra conditioned on moon position, separation, and illumination fraction
 4. **Data utilities** - Download and load DESI DR1 Sky Spectra Value-Added Catalog (VAC) with automatic integrity verification and subset filtering
 
 Built with **JAX/Equinox** for high-performance model inference and designed to integrate with SpecSim and survey forecasting workflows. This repository hosts the code and notebooks supporting the forthcoming paper by Dowicz et al. (20XX).
@@ -232,7 +234,10 @@ desisky.io.save(
 **Available models:**
 - `"broadband"` - Multi-layer perceptron (6 inputs → 4 outputs) for V, g, r, z magnitude prediction from moon/transparency conditions
 - `"vae"` - Variational autoencoder (7781 → 8 → 7781) for sky spectra compression, reconstruction, and latent space analysis
-- `"ldm_dark"` - Latent diffusion model (1D U-Net) for generating dark-time sky spectra conditioned on 8 observational parameters
+- `"ldm_dark"` - Latent diffusion model (1D U-Net) for generating dark-time sky spectra conditioned on 8 observational parameters:
+  - Conditioning: `[OBSALT, TRANSPARENCY_GFA, SUNALT, SOLFLUX, ECLLON, ECLLAT, GALLON, GALLAT]`
+- `"ldm_moon"` - Latent diffusion model (1D U-Net) for generating moon-contaminated sky spectra conditioned on 6 observational parameters:
+  - Conditioning: `[OBSALT, TRANSPARENCY_GFA, SUNALT, MOONALT, MOONSEP, MOONFRAC]`
 
 ## Data Download
 
@@ -288,7 +293,7 @@ See [examples/](examples/) directory for Jupyter notebooks demonstrating:
 - **[02_vae_inference.ipynb](examples/02_vae_inference.ipynb)** - VAE inference: encoding/decoding sky spectra and latent space visualization
 - **[03_vae_analysis.ipynb](examples/03_vae_analysis.ipynb)** - Advanced VAE analysis: latent space interpolation and anomaly detection
 - **[04_vae_training.ipynb](examples/04_vae_training.ipynb)** - Train a VAE from scratch with InfoVAE-MMD objective
-- **[05_ldm_inference.ipynb](examples/05_ldm_inference.ipynb)** - Generate dark-time sky spectra using the latent diffusion model with custom conditioning
+- **[05_ldm_inference.ipynb](examples/05_ldm_inference.ipynb)** - Generate dark-time and moon-contaminated sky spectra using the latent diffusion models with custom conditioning
 
 ## Development
 

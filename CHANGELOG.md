@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12-04
+
+### Added
+
+- Pre-trained Latent Diffusion Model for moon-contaminated sky spectra (`ldm_moon`)
+  - Trained on observations with moon altitude > 5°, moon fraction > 0.5, and moon separation ≤ 90°
+  - Conditioned on 6 observational parameters: `[OBSALT, TRANSPARENCY_GFA, SUNALT, MOONALT, MOONSEP, MOONFRAC]`
+  - Enables generation of realistic moon-contaminated sky spectra for different lunar conditions
+- Updated `05_ldm_inference.ipynb` with examples comparing dark-time and moon-contaminated models
+- Integration tests for `ldm_moon` model loading and inference
+- Documentation updates for moon model in README.md
+
 ## [0.1.0] - 2025-12-03
 
 ### Added
@@ -46,5 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for CPU and CUDA (GPU) installations
 - MIT License
 
-[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MatthewDowicz/desisky/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MatthewDowicz/desisky/releases/tag/v0.1.0
