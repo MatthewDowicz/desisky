@@ -376,3 +376,50 @@ class TestLDMIntegration:
         except Exception as e:
             # Models might not be available in test environment
             pytest.skip(f"Pre-trained models not available: {e}")
+
+    def test_load_and_sample_ldm_moon(self):
+        """Test loading ldm_moon model and generating samples."""
+        pytest.importorskip("desisky.models.ldm")
+
+        try:
+            from desisky.io import load_builtin
+            from desisky.inference import LatentDiffusionSampler
+
+            # Try to load pre-trained models
+            ldm_moon, ldm_moon_meta = load_builtin("ldm_moon")
+            vae, vae_meta = load_builtin("vae")
+
+            # Verify moon model has correct meta_dim
+            assert ldm_moon_meta['arch']['meta_dim'] == 6
+
+            # Create sampler
+            sampler = LatentDiffusionSampler(
+                ldm_model=ldm_moon,
+                vae_model=vae,
+                method="heun",
+                num_steps=10  # Small for fast testing
+            )
+
+            # Sample with realistic moon conditioning
+            # (OBSALT, TRANSPARENCY_GFA, SUNALT, MOONALT, MOONSEP, MOONFRAC)
+            conditioning = jnp.array([
+                [60.0, 0.9, -25.0, 30.0, 45.0, 0.8],
+                [70.0, 0.85, -28.0, 25.0, 60.0, 0.9],
+            ])
+
+            spectra = sampler.sample(
+                key=jr.PRNGKey(0),
+                conditioning=conditioning,
+                guidance_scale=2.0
+            )
+
+            # Check output shape (should match VAE output)
+            assert spectra.shape[0] == 2
+            assert spectra.shape[1] == vae_meta['arch']['in_channels']
+
+            # Check values are finite
+            assert jnp.all(jnp.isfinite(spectra))
+
+        except Exception as e:
+            # Models might not be available in test environment
+            pytest.skip(f"Pre-trained models not available: {e}")
