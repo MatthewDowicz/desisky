@@ -189,7 +189,7 @@ EXTERNAL_WEIGHTS = {
         "size_mb": 4.4,
     },
     "ldm_moon": {
-        "url": "https://huggingface.co/desisky/ldm_moon.eqx/resolve/main/ldm_moon.eqx",
+        "url": "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/ldm_moon.eqx",
         "sha256": "12c89d9865fab4f34a7e72e402c45d60bfb4067f15760298d083f3b2f8e9d2db",
         "size_mb": 4.39,
     }
