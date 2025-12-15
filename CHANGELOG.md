@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2025-12-04
+## [0.3.0] - 2025-12-12
 
 ### Added
 
@@ -15,9 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Trained on observations with moon altitude > 5°, moon fraction > 0.5, and moon separation ≤ 90°
   - Conditioned on 6 observational parameters: `[OBSALT, TRANSPARENCY_GFA, SUNALT, MOONALT, MOONSEP, MOONFRAC]`
   - Enables generation of realistic moon-contaminated sky spectra for different lunar conditions
-- Updated `05_ldm_inference.ipynb` with examples comparing dark-time and moon-contaminated models
-- Integration tests for `ldm_moon` model loading and inference
-- Documentation updates for moon model in README.md
+- Pre-trained Latent Diffusion Model for twilight sky spectra (`ldm_twilight`)
+  - Trained on observations with sun altitude > -20° (twilight conditions)
+  - Conditioned on 4 observational parameters: `[OBSALT, TRANSPARENCY_GFA, SUNALT, SUNSEP]`
+  - Enables generation of realistic twilight sky spectra for different solar elevation angles
+- Updated `05_ldm_inference.ipynb` with examples comparing dark-time, moon-contaminated, and twilight models
+- Updated `06_ldm_training.ipynb` with twilight model training example
+- Integration tests for both `ldm_moon` and `ldm_twilight` model loading and inference
+- Documentation updates for all three LDM variants in README.md
 
 ## [0.1.0] - 2025-12-03
 
@@ -58,6 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for CPU and CUDA (GPU) installations
 - MIT License
 
-[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/MatthewDowicz/desisky/compare/v0.1.0...v0.2.0
+[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MatthewDowicz/desisky/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/MatthewDowicz/desisky/releases/tag/v0.1.0

@@ -654,3 +654,9 @@ register_model(
     "ldm_moon",
     ModelSpec(constructor=make_UNet1D_cond, resource="ldm_moon.eqx")
 )
+
+# Register the LDM twilight model for automatic loading
+register_model(
+    "ldm_twilight",
+    ModelSpec(constructor=make_UNet1D_cond, resource="ldm_twilight.eqx")
+)
