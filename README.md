@@ -14,6 +14,7 @@
 3. **Latent Diffusion Models (LDM)** - Generates realistic night-sky emission spectra conditioned on observational parameters:
    - **LDM Dark** - Dark-time spectra conditioned on sun position, transparency, galactic/ecliptic coordinates, and solar flux
    - **LDM Moon** - Moon-contaminated spectra conditioned on moon position, separation, and illumination fraction
+   - **LDM Twilight** - Twilight spectra conditioned on observation altitude, transparency, sun altitude, and sun separation
 4. **Data utilities** - Download and load DESI DR1 Sky Spectra Value-Added Catalog (VAC) with automatic integrity verification and subset filtering
 
 Built with **JAX/Equinox** for high-performance model inference and designed to integrate with SpecSim and survey forecasting workflows. This repository hosts the code and notebooks supporting the forthcoming paper by Dowicz et al. (20XX).
@@ -238,6 +239,8 @@ desisky.io.save(
   - Conditioning: `[OBSALT, TRANSPARENCY_GFA, SUNALT, SOLFLUX, ECLLON, ECLLAT, GALLON, GALLAT]`
 - `"ldm_moon"` - Latent diffusion model (1D U-Net) for generating moon-contaminated sky spectra conditioned on 6 observational parameters:
   - Conditioning: `[OBSALT, TRANSPARENCY_GFA, SUNALT, MOONALT, MOONSEP, MOONFRAC]`
+- `"ldm_twilight"` - Latent diffusion model (1D U-Net) for generating twilight sky spectra conditioned on 4 observational parameters:
+  - Conditioning: `[OBSALT, TRANSPARENCY_GFA, SUNALT, SUNSEP]`
 
 ## Data Download
 
