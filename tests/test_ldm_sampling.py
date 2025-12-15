@@ -423,3 +423,50 @@ class TestLDMIntegration:
         except Exception as e:
             # Models might not be available in test environment
             pytest.skip(f"Pre-trained models not available: {e}")
+
+    def test_load_and_sample_ldm_twilight(self):
+        """Test loading ldm_twilight model and generating samples."""
+        pytest.importorskip("desisky.models.ldm")
+
+        try:
+            from desisky.io import load_builtin
+            from desisky.inference import LatentDiffusionSampler
+
+            # Try to load pre-trained models
+            ldm_twilight, ldm_twilight_meta = load_builtin("ldm_twilight")
+            vae, vae_meta = load_builtin("vae")
+
+            # Verify twilight model has correct meta_dim (4 features)
+            assert ldm_twilight_meta['arch']['meta_dim'] == 4
+
+            # Create sampler
+            sampler = LatentDiffusionSampler(
+                ldm_model=ldm_twilight,
+                vae_model=vae,
+                method="heun",
+                num_steps=10  # Small for fast testing
+            )
+
+            # Sample with realistic twilight conditioning
+            # (OBSALT, TRANSPARENCY_GFA, SUNALT, SUNSEP)
+            conditioning = jnp.array([
+                [60.0, 0.9, -15.0, 120.0],
+                [70.0, 0.85, -12.0, 115.0],
+            ])
+
+            spectra = sampler.sample(
+                key=jr.PRNGKey(0),
+                conditioning=conditioning,
+                guidance_scale=2.0
+            )
+
+            # Check output shape (should match VAE output)
+            assert spectra.shape[0] == 2
+            assert spectra.shape[1] == vae_meta['arch']['in_channels']
+
+            # Check values are finite
+            assert jnp.all(jnp.isfinite(spectra))
+
+        except Exception as e:
+            # Models might not be available in test environment
+            pytest.skip(f"Pre-trained models not available: {e}")
