@@ -6,14 +6,137 @@ The UNet operates on latent representations produced by the SkyVAE and is condit
 observational metadata (moon position, observing altitude, transparency, etc.).
 
 The architecture supports classifier-free guidance for controllable generation.
+
+EDM preconditioning (Karras et al. 2022) wraps the raw UNet to improve training
+stability and sample quality. The preconditioned denoiser is:
+
+    D(x; σ) = c_skip(σ) · x + c_out(σ) · F_θ(c_in(σ) · x; c_noise(σ))
+
+where F_θ is the raw UNet network.
 """
 
 from typing import Any, Optional, Callable, Sequence
+import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
 
 from desisky.io.model_io import register_model, ModelSpec
+
+
+# -------------------------------------------------------------------------
+# EDM Constants (Karras et al. 2022, Table 1)
+# -------------------------------------------------------------------------
+
+EDM_P_MEAN = -1.2       # Mean of log-normal noise distribution
+EDM_P_STD = 1.2         # Std of log-normal noise distribution
+EDM_SIGMA_MIN = 0.002   # Minimum sigma for sampling
+EDM_SIGMA_MAX = 80.0    # Maximum sigma for sampling
+
+
+# -------------------------------------------------------------------------
+# EDM Preconditioning Functions (Karras et al. 2022, Table 1)
+# -------------------------------------------------------------------------
+
+def c_skip(sigma: jnp.ndarray, sigma_data: float) -> jnp.ndarray:
+    """
+    Skip connection coefficient: c_skip(σ) = σ_data² / (σ² + σ_data²).
+
+    At low noise (σ→0): c_skip→1 (pass input through).
+    At high noise (σ→∞): c_skip→0 (rely on network).
+    """
+    return sigma_data**2 / (sigma**2 + sigma_data**2)
+
+
+def c_out(sigma: jnp.ndarray, sigma_data: float) -> jnp.ndarray:
+    """
+    Output scaling: c_out(σ) = σ · σ_data / √(σ² + σ_data²).
+
+    Ensures denoiser output has appropriate variance.
+    """
+    return sigma * sigma_data / jnp.sqrt(sigma**2 + sigma_data**2)
+
+
+def c_in(sigma: jnp.ndarray, sigma_data: float) -> jnp.ndarray:
+    """
+    Input scaling: c_in(σ) = 1 / √(σ² + σ_data²).
+
+    Normalizes input to approximately unit variance.
+    """
+    return 1.0 / jnp.sqrt(sigma**2 + sigma_data**2)
+
+
+def c_noise(sigma: jnp.ndarray) -> jnp.ndarray:
+    """
+    Noise conditioning: c_noise(σ) = (1/4) · ln(σ).
+
+    Maps continuous σ to suitable range for sinusoidal embeddings.
+    """
+    return 0.25 * jnp.log(sigma)
+
+
+def edm_denoiser(
+    model: eqx.Module,
+    x_noisy: jnp.ndarray,
+    sigma: jnp.ndarray,
+    cond: jnp.ndarray,
+    sigma_data: float,
+    key=None,
+    dropout_p: float = 0.0,
+) -> jnp.ndarray:
+    """
+    EDM preconditioned denoiser (single sample).
+
+    D(x; σ) = c_skip(σ) · x + c_out(σ) · F_θ(c_in(σ) · x; c_noise(σ), cond)
+
+    Parameters
+    ----------
+    model : eqx.Module
+        Raw UNet network F_θ.
+    x_noisy : jnp.ndarray
+        Noisy input, shape (C, L) — single sample.
+    sigma : jnp.ndarray
+        Noise level (scalar).
+    cond : jnp.ndarray
+        Conditioning vector, shape (meta_dim,).
+    sigma_data : float
+        Standard deviation of training data.
+    key : jax.random.PRNGKey, optional
+        RNG key for CFG dropout (None at inference).
+    dropout_p : float
+        CFG dropout probability.
+
+    Returns
+    -------
+    jnp.ndarray
+        Denoised estimate, shape (C, L).
+    """
+    c_s = c_skip(sigma, sigma_data)
+    c_o = c_out(sigma, sigma_data)
+    c_i = c_in(sigma, sigma_data)
+    c_n = c_noise(sigma)
+
+    x_scaled = c_i * x_noisy
+    F_out = model(x_scaled, c_n, cond, key=key, dropout_p=dropout_p)
+
+    return c_s * x_noisy + c_o * F_out
+
+
+def compute_sigma_data(latent_data: np.ndarray) -> float:
+    """
+    Compute σ_data (standard deviation of training data) for EDM.
+
+    Parameters
+    ----------
+    latent_data : np.ndarray
+        Training latents, shape (N, latent_dim) or (N, C, L).
+
+    Returns
+    -------
+    float
+        Standard deviation of the training data.
+    """
+    return float(np.std(latent_data))
 
 
 # -------------------------------------------------------------------------
@@ -599,7 +722,7 @@ def make_UNet1D_cond(
     hidden: int,
     levels: int,
     emb_dim: int,
-    key=None
+    key=None,
 ) -> UNet1D_cond:
     """
     Factory function for creating a UNet1D_cond model.
