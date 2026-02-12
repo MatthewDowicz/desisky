@@ -7,6 +7,12 @@ Latent Diffusion Model (LDM) training utilities.
 
 This module provides a flexible trainer for conditional latent diffusion models
 that can be used with different conditioning variables (dark-time, twilight, moon).
+
+Training uses the EDM framework (Karras et al. 2022):
+- Log-normal noise distribution for sigma sampling
+- Preconditioned denoiser: D(x; sigma) = c_skip * x + c_out * F_theta(c_in * x; c_noise)
+- EDM-weighted loss: lambda(sigma) * ||D(x + sigma*n; sigma) - x||^2
+- Exponential Moving Average (EMA) of model weights for stable sampling
 """
 
 from dataclasses import dataclass, field
@@ -14,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -21,170 +28,276 @@ import jax.random as jr
 import optax
 
 from desisky.io import save
+from desisky.models.ldm import (
+    edm_denoiser,
+    EDM_P_MEAN,
+    EDM_P_STD,
+)
 
 
 # ============================================================================
-# Noise Schedule
+# Conditioning Normalization Utilities
 # ============================================================================
 
 
-def cosine_beta_schedule(T: int, s: float = 0.008) -> dict[str, jnp.ndarray]:
-    """
-    Cosine noise schedule from Nichol & Dhariwal (2021).
+def fit_conditioning_scaler(
+    conditioning: np.ndarray,
+    columns: list[str],
+) -> dict:
+    """Compute per-feature mean and standard deviation for conditioning normalization.
 
-    This schedule provides a smoother noise curve compared to linear schedules,
-    which helps with training stability and sample quality.
+    Fits a zero-mean, unit-variance scaler on the provided conditioning array
+    (typically the **training** split only, to avoid data leakage).  The returned
+    dictionary is compatible with :class:`LatentDiffusionSampler`'s
+    ``conditioning_scaler`` parameter and is stored in model checkpoint metadata
+    so that inference can automatically reproduce the same normalization.
 
     Parameters
     ----------
-    T : int
-        Number of diffusion timesteps.
-    s : float, optional
-        Small offset to prevent singularities, by default 0.008.
+    conditioning : np.ndarray
+        Conditioning feature matrix, shape ``(n_samples, n_features)``.
+        Should contain only the training split.
+    columns : list[str]
+        Feature names corresponding to each column (e.g.
+        ``["OBSALT", "TRANSPARENCY_GFA", ...]``).
 
     Returns
     -------
-    dict[str, jnp.ndarray]
-        Dictionary containing:
-        - 'sqrtab': sqrt(alpha_bar_t), used for forward diffusion
-        - 'sqrtmab': sqrt(1 - alpha_bar_t), noise coefficient
-        Both arrays have shape (T+1,) indexed from 0 to T.
+    dict
+        Dictionary with keys:
 
-    Notes
-    -----
-    The forward diffusion process adds noise according to:
-        x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * epsilon
-
-    References
-    ----------
-    Nichol, A. Q., & Dhariwal, P. (2021). Improved denoising diffusion
-    probabilistic models. ICML 2021.
+        - ``"mean"`` — per-feature means (list of float)
+        - ``"scale"`` — per-feature standard deviations (list of float)
+        - ``"columns"`` — feature names (list of str)
 
     Examples
     --------
-    >>> schedules = cosine_beta_schedule(T=1000)
-    >>> schedules['sqrtab'].shape
-    (1001,)
-    >>> schedules['sqrtab'][0]  # At t=0, should be close to 1 (clean data)
-    Array(1., dtype=float32)
+    >>> scaler = fit_conditioning_scaler(cond_train, ["OBSALT", "SUNALT"])
+    >>> scaler["mean"]   # [62.35, -45.40]
+    >>> scaler["scale"]  # [11.64, 16.19]
     """
-    t = jnp.linspace(0, T, T + 1, dtype=jnp.float32)
-    f = lambda t_: jnp.cos((t_ / T + s) / (1 + s) * jnp.pi / 2) ** 2
-    alphabar_t = f(t) / f(0)
-
-    beta_t = 1 - alphabar_t[1:] / alphabar_t[:-1]
-    beta_t = jnp.clip(beta_t, a_min=1e-5, a_max=0.999)
-    beta_t = jnp.concatenate([jnp.array([1e-5]), beta_t])
-
-    alpha_t = 1 - beta_t
-    log_alpha_t = jnp.log(alpha_t)
-    alphabar_t = jnp.exp(jnp.cumsum(log_alpha_t))
-
-    sqrtab = jnp.sqrt(alphabar_t)
-    sqrtmab = jnp.sqrt(1 - alphabar_t)
-
+    mean = conditioning.mean(axis=0)
+    scale = conditioning.std(axis=0)
     return {
-        "sqrtab": sqrtab,
-        "sqrtmab": sqrtmab,
+        "mean": mean.tolist(),
+        "scale": scale.tolist(),
+        "columns": list(columns),
     }
 
 
-# ============================================================================
-# Loss Function
-# ============================================================================
+def normalize_conditioning(
+    conditioning: np.ndarray,
+    scaler: dict,
+) -> np.ndarray:
+    """Apply zero-mean, unit-variance normalization to conditioning features.
 
-
-def diffusion_loss(
-    model: eqx.Module,
-    x: jnp.ndarray,
-    cond: jnp.ndarray,
-    schedules: dict[str, jnp.ndarray],
-    n_T: int,
-    key: jax.random.PRNGKey,
-    dropout_p: float = 0.1,
-) -> jnp.ndarray:
-    """
-    Diffusion model training loss (noise prediction MSE).
-
-    This loss function trains the model to predict the noise added during the
-    forward diffusion process. It implements classifier-free guidance training
-    by randomly dropping conditioning with probability `dropout_p`.
+    Uses the scaler parameters from :func:`fit_conditioning_scaler` to
+    transform conditioning features via ``(x - mean) / scale``.  This is
+    the same transformation that :class:`LatentDiffusionSampler` applies
+    internally at inference time when ``conditioning_scaler`` is provided.
 
     Parameters
     ----------
-    model : eqx.Module
-        UNet diffusion model that takes (x, t, conditioning, key, dropout_p)
-        and outputs predicted noise.
-    x : jnp.ndarray
-        Clean latent samples, shape (batch, channels, latent_dim).
-    cond : jnp.ndarray
-        Conditioning metadata, shape (batch, meta_dim).
-    schedules : dict[str, jnp.ndarray]
-        Noise schedule with 'sqrtab' and 'sqrtmab' from cosine_beta_schedule.
-    n_T : int
-        Number of diffusion timesteps (e.g., 1000).
+    conditioning : np.ndarray
+        Conditioning feature matrix, shape ``(n_samples, n_features)``.
+    scaler : dict
+        Scaler dictionary with ``"mean"`` and ``"scale"`` keys, as
+        returned by :func:`fit_conditioning_scaler`.
+
+    Returns
+    -------
+    np.ndarray
+        Normalized conditioning array, same shape and dtype as input.
+
+    Examples
+    --------
+    >>> scaler = fit_conditioning_scaler(cond_train, COLS)
+    >>> cond_train_norm = normalize_conditioning(cond_train, scaler)
+    >>> cond_val_norm = normalize_conditioning(cond_val, scaler)
+    """
+    mean = np.array(scaler["mean"])
+    scale = np.array(scaler["scale"])
+    return (conditioning - mean) / scale
+
+
+# ============================================================================
+# EDM Noise Distribution (Karras et al. 2022)
+# ============================================================================
+
+
+def sample_edm_sigma(
+    key: jax.random.PRNGKey,
+    shape: tuple,
+    p_mean: float = EDM_P_MEAN,
+    p_std: float = EDM_P_STD,
+) -> jnp.ndarray:
+    """
+    Sample noise levels from EDM log-normal distribution.
+
+    ln(sigma) ~ N(P_mean, P_std^2)  =>  sigma = exp(P_mean + P_std * z), z ~ N(0,1)
+
+    Parameters
+    ----------
     key : jax.random.PRNGKey
-        Random key for sampling timesteps and noise.
-    dropout_p : float, optional
-        Probability of dropping conditioning for classifier-free guidance,
-        by default 0.1 (10% dropout).
+        Random key.
+    shape : tuple
+        Output shape.
+    p_mean : float
+        Mean of log-normal distribution.
+    p_std : float
+        Std of log-normal distribution.
 
     Returns
     -------
     jnp.ndarray
-        Scalar MSE loss between predicted and true noise.
-
-    Notes
-    -----
-    The forward diffusion process is:
-        x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * epsilon
-
-    The model learns to predict epsilon given (x_t, t, conditioning).
-
-    Classifier-free guidance training randomly drops conditioning to enable
-    guidance at inference time via:
-        pred = (1 + w) * pred_cond - w * pred_uncond
-
-    Examples
-    --------
-    >>> import jax.random as jr
-    >>> model = make_UNet1D_cond(in_ch=1, out_ch=1, meta_dim=8, key=jr.PRNGKey(0))
-    >>> x = jr.normal(jr.PRNGKey(1), (16, 1, 8))  # 16 samples
-    >>> cond = jr.normal(jr.PRNGKey(2), (16, 8))  # 8 conditioning features
-    >>> schedules = cosine_beta_schedule(T=1000)
-    >>> loss = diffusion_loss(model, x, cond, schedules, 1000, jr.PRNGKey(3))
-    >>> loss.shape
-    ()
+        Sampled sigma values.
     """
-    key, k_t, k_eps, k_drop = jr.split(key, 4)
+    z = jax.random.normal(key, shape)
+    sigma = jnp.exp(p_mean + p_std * z)
+    return sigma
+
+
+def edm_loss_weight(sigma: jnp.ndarray, sigma_data: float) -> jnp.ndarray:
+    """
+    EDM loss weighting: lambda(sigma) = (sigma^2 + sigma_data^2) / (sigma * sigma_data)^2.
+
+    Parameters
+    ----------
+    sigma : jnp.ndarray
+        Noise levels.
+    sigma_data : float
+        Standard deviation of training data.
+
+    Returns
+    -------
+    jnp.ndarray
+        Loss weights.
+    """
+    return (sigma**2 + sigma_data**2) / (sigma * sigma_data) ** 2
+
+
+# ============================================================================
+# EDM Loss Function (Karras et al. 2022)
+# ============================================================================
+
+
+def edm_loss(
+    model: eqx.Module,
+    x: jnp.ndarray,
+    cond: jnp.ndarray,
+    sigma_data: float,
+    key: jax.random.PRNGKey,
+    cfg_dropout_p: float = 0.1,
+    p_mean: float = EDM_P_MEAN,
+    p_std: float = EDM_P_STD,
+) -> jnp.ndarray:
+    """
+    EDM loss with preconditioning (Karras et al. 2022).
+
+    Trains the model to denoise data corrupted at various noise levels.
+    The preconditioned denoiser D predicts the clean data x from noisy
+    input (x + sigma * noise), weighted by lambda(sigma) so that all
+    noise levels contribute equally to learning.
+
+    Parameters
+    ----------
+    model : eqx.Module
+        Raw UNet network F_theta (not the preconditioned denoiser).
+    x : jnp.ndarray
+        Clean latent samples, shape (batch, channels, latent_dim).
+    cond : jnp.ndarray
+        Conditioning metadata, shape (batch, meta_dim).
+    sigma_data : float
+        Standard deviation of training data. Compute with
+        ``compute_sigma_data(training_latents)``.
+    key : jax.random.PRNGKey
+        Random key.
+    cfg_dropout_p : float
+        CFG dropout probability.
+    p_mean : float
+        Mean of log-normal noise distribution.
+    p_std : float
+        Std of log-normal noise distribution.
+
+    Returns
+    -------
+    jnp.ndarray
+        Scalar weighted EDM loss.
+    """
+    key, k_sigma, k_eps = jr.split(key, 3)
     B = x.shape[0]
 
-    # Sample random timesteps for each sample in batch
-    t_int = jr.randint(k_t, (B,), 1, n_T + 1)  # [1, n_T]
-    t_norm = t_int.astype(jnp.float32) / n_T   # Normalize to [0, 1]
-    t_norm = t_norm[:, None]                   # (B, 1)
+    # Sample sigma from log-normal distribution
+    sigma = sample_edm_sigma(k_sigma, (B,), p_mean, p_std)
 
-    # Sample noise from standard normal
-    eps = jr.normal(k_eps, shape=x.shape)
+    # Sample noise
+    noise = jax.random.normal(k_eps, shape=x.shape)
 
-    # Gather schedule values for each timestep
-    sqrtab = schedules["sqrtab"][t_int][:, None, None]   # (B, 1, 1)
-    sqrtmab = schedules["sqrtmab"][t_int][:, None, None]  # (B, 1, 1)
+    # EDM forward diffusion: x_noisy = x + sigma * noise
+    x_noisy = x + sigma[:, None, None] * noise
 
-    # Forward diffusion: create noisy latents
-    x_t = sqrtab * x + sqrtmab * eps
+    # Generate dropout keys for CFG
+    drop_keys = jr.split(key, B)
 
-    # Generate dropout keys for classifier-free guidance
-    drop_keys = jr.split(k_drop, B)
+    # Apply preconditioned denoiser (vectorized over batch)
+    D_out = jax.vmap(edm_denoiser, in_axes=(None, 0, 0, 0, None, 0, None))(
+        model, x_noisy, sigma, cond, sigma_data, drop_keys, cfg_dropout_p
+    )
 
-    # Predict noise (model handles CFG dropout internally)
-    predicted_eps = jax.vmap(
-        lambda xt, t, c, k: model(xt, t, c, key=k, dropout_p=dropout_p)
-    )(x_t, t_norm, cond, drop_keys)
+    # Per-sample squared error (target is clean data x)
+    sq_error = jnp.mean((D_out - x) ** 2, axis=(1, 2))  # (B,)
 
-    # MSE loss between predicted and true noise
-    loss = jnp.mean((predicted_eps - eps) ** 2)
+    # Apply EDM loss weighting
+    weights = edm_loss_weight(sigma, sigma_data)  # (B,)
+
+    # Weighted mean loss
+    loss = jnp.mean(weights * sq_error)
     return loss
+
+
+# ============================================================================
+# EMA Utilities
+# ============================================================================
+
+
+def ema_update(
+    ema_model: eqx.Module, model: eqx.Module, decay: float
+) -> eqx.Module:
+    """
+    Update EMA model weights: ema = decay * ema + (1 - decay) * model.
+
+    Parameters
+    ----------
+    ema_model : eqx.Module
+        Current EMA model.
+    model : eqx.Module
+        Current training model.
+    decay : float
+        EMA decay rate (e.g., 0.9999).
+
+    Returns
+    -------
+    eqx.Module
+        Updated EMA model.
+    """
+    ema_params, ema_static = eqx.partition(ema_model, eqx.is_array)
+    model_params, _ = eqx.partition(model, eqx.is_array)
+
+    new_ema_params = jax.tree.map(
+        lambda e, m: decay * e + (1 - decay) * m,
+        ema_params,
+        model_params,
+    )
+
+    return eqx.combine(new_ema_params, ema_static)
+
+
+@eqx.filter_jit
+def ema_update_jit(
+    ema_model: eqx.Module, model: eqx.Module, decay: float
+) -> eqx.Module:
+    """JIT-compiled version of ``ema_update``."""
+    return ema_update(ema_model, model, decay)
 
 
 # ============================================================================
@@ -195,57 +308,80 @@ def diffusion_loss(
 @dataclass
 class LDMTrainingConfig:
     """
-    Configuration for LDM training.
+    Configuration for LDM training with EDM (Karras et al. 2022).
 
-    This configuration is flexible and works with different conditioning
-    variables (dark-time, twilight, moon) by accepting meta_dim dynamically.
-
-    Attributes
+    Parameters
     ----------
     epochs : int
         Number of training epochs.
     learning_rate : float
         Adam optimizer learning rate.
     meta_dim : int
-        Number of conditioning features (automatically set from model).
-    n_T : int, optional
-        Number of diffusion timesteps, by default 1000.
-    dropout_p : float, optional
-        Classifier-free guidance dropout probability, by default 0.1.
-    print_every : int, optional
-        Print training progress every N epochs, by default 50.
-    validate_every : int, optional
-        Validate every N epochs, by default 1.
-    save_best : bool, optional
-        Save best model based on validation loss, by default True.
-    run_name : str, optional
-        Name for saved checkpoint file, by default "ldm_model".
-    save_dir : Optional[str], optional
+        Number of conditioning features.
+    sigma_data : float
+        Standard deviation of training data (required).
+        Compute with `compute_sigma_data(training_latents)`.
+    dropout_p : float
+        CFG dropout probability.
+    p_mean : float
+        Mean of EDM log-normal noise distribution.
+    p_std : float
+        Std of EDM log-normal noise distribution.
+    ema_decay : float
+        EMA decay rate. Set to 0.0 to disable EMA.
+    print_every : int
+        Print training progress every N epochs.
+    validate_every : int
+        Validate every N epochs.
+    save_best : bool
+        Save best model based on validation loss.
+    run_name : str
+        Name for saved checkpoint file.
+    save_dir : Optional[str]
         Custom save directory. If None, uses ~/.cache/desisky/saved_models/ldm.
-    random_seed : int, optional
-        Random seed for reproducibility, by default 42.
+    random_seed : int
+        Random seed for reproducibility.
+    val_expids : list[int] | None
+        Validation set exposure IDs. If provided, stored in checkpoint
+        metadata so downstream code can identify which samples were
+        held out during training.
+    conditioning_scaler : dict | None
+        Conditioning feature normalization parameters from training.
+        Expected keys: ``"mean"`` (list), ``"scale"`` (list), and
+        ``"columns"`` (list of feature names). If provided, stored in
+        checkpoint metadata for automatic normalization at inference time.
 
     Examples
     --------
+    >>> from desisky.models.ldm import compute_sigma_data
+    >>> sigma_data = compute_sigma_data(training_latents)
     >>> config = LDMTrainingConfig(
     ...     epochs=500,
     ...     learning_rate=1e-4,
-    ...     meta_dim=8,  # 8 conditioning features for dark-time
-    ...     run_name="ldm_dark"
+    ...     meta_dim=8,
+    ...     sigma_data=sigma_data,
+    ...     run_name="ldm_dark",
+    ...     val_expids=[12345, 67890, ...],
+    ...     conditioning_scaler={"mean": [...], "scale": [...], "columns": [...]},
     ... )
     """
 
     epochs: int
     learning_rate: float
-    meta_dim: int  # Dynamically set based on conditioning columns
-    n_T: int = 1000
+    meta_dim: int
+    sigma_data: float
     dropout_p: float = 0.1
+    p_mean: float = EDM_P_MEAN
+    p_std: float = EDM_P_STD
+    ema_decay: float = 0.9999
     print_every: int = 50
     validate_every: int = 1
     save_best: bool = True
     run_name: str = "ldm_model"
     save_dir: Optional[str] = None
     random_seed: int = 42
+    val_expids: Optional[list] = None
+    conditioning_scaler: Optional[dict] = None
 
 
 @dataclass
@@ -253,14 +389,16 @@ class LDMTrainingHistory:
     """
     Training history for LDM.
 
-    Tracks training and validation losses throughout training.
+    Both training and validation use the same weighted EDM loss function.
+    The only difference is that CFG dropout is disabled during validation
+    (same as turning off regular dropout at evaluation time).
 
     Attributes
     ----------
     train_losses : list[float]
-        Training loss per epoch.
+        Weighted EDM training loss per epoch.
     val_losses : list[float]
-        Validation loss per epoch (if validation used).
+        Weighted EDM validation loss per epoch (no CFG dropout).
     best_val_loss : float
         Best validation loss achieved.
     best_epoch : int
@@ -280,60 +418,44 @@ class LDMTrainingHistory:
 
 class LatentDiffusionTrainer:
     """
-    Trainer for latent diffusion models.
+    Trainer for latent diffusion models using EDM (Karras et al. 2022).
 
-    This trainer is flexible and can be used for different conditioning
-    scenarios (dark-time, twilight, moon) by accepting models with different
-    meta_dim values.
+    Features:
+    - EDM preconditioned loss with log-normal noise distribution
+    - Exponential Moving Average (EMA) of model weights
+    - Classifier-free guidance training via conditioning dropout
+    - Automatic best-model checkpointing
 
-    The trainer:
-    - Handles training loop with optional validation
-    - Saves best model checkpoints using desisky.io format
-    - Tracks training history
-    - Supports classifier-free guidance training
+    The EMA model is a smoothed copy of the training model used for
+    sampling and generation. All loss curves (training and validation)
+    are computed on the base training model so they are directly
+    comparable for diagnosing overfitting.
 
     Parameters
     ----------
     model : eqx.Module
-        Conditional UNet diffusion model (e.g., from make_UNet1D_cond).
+        Conditional UNet diffusion model (raw F_theta network).
     config : LDMTrainingConfig
-        Training configuration.
+        Training configuration (must include `sigma_data`).
     optimizer : optax.GradientTransformation, optional
         Custom optimizer. If None, uses Adam with config.learning_rate.
 
-    Attributes
-    ----------
-    model : eqx.Module
-        The diffusion model being trained.
-    config : LDMTrainingConfig
-        Training configuration.
-    optimizer : optax.GradientTransformation
-        Optimizer for training.
-    history : LDMTrainingHistory
-        Training history tracker.
-    schedules : dict[str, jnp.ndarray]
-        Noise schedule (sqrtab, sqrtmab).
-    best_model : eqx.Module or None
-        Best model (lowest validation loss).
-
     Examples
     --------
-    >>> from desisky.models.ldm import make_UNet1D_cond
+    >>> from desisky.models.ldm import make_UNet1D_cond, compute_sigma_data
     >>> import jax.random as jr
     >>>
-    >>> # Create model for dark-time (8 conditioning features)
     >>> model = make_UNet1D_cond(
-    ...     in_ch=1, out_ch=1, meta_dim=8, hidden=32, levels=3, key=jr.PRNGKey(0)
+    ...     in_ch=1, out_ch=1, meta_dim=8, hidden=64, levels=4,
+    ...     emb_dim=32, key=jr.PRNGKey(0)
     ... )
-    >>>
-    >>> # Configure training
+    >>> sigma_data = compute_sigma_data(training_latents)
     >>> config = LDMTrainingConfig(
-    ...     epochs=500, learning_rate=1e-4, meta_dim=8, run_name="ldm_dark"
+    ...     epochs=500, learning_rate=1e-4, meta_dim=8,
+    ...     sigma_data=sigma_data, run_name="ldm_dark"
     ... )
-    >>>
-    >>> # Train
     >>> trainer = LatentDiffusionTrainer(model, config)
-    >>> trained_model, history = trainer.train(train_loader, val_loader)
+    >>> trained_model, ema_model, history = trainer.train(train_loader, val_loader)
     """
 
     def __init__(
@@ -346,12 +468,17 @@ class LatentDiffusionTrainer:
         self.config = config
         self.optimizer = optimizer or optax.adam(config.learning_rate)
         self.history = LDMTrainingHistory()
-        self.schedules = cosine_beta_schedule(T=config.n_T)
         self.best_model = None
+
+        # Initialize EMA model as a copy of the base model
+        if config.ema_decay > 0.0:
+            self.ema_model = model
+        else:
+            self.ema_model = None
 
     def train(self, train_loader, val_loader=None):
         """
-        Train the LDM model.
+        Train the LDM model with EDM loss and EMA.
 
         Parameters
         ----------
@@ -363,43 +490,35 @@ class LatentDiffusionTrainer:
         Returns
         -------
         model : eqx.Module
-            Trained model (final state).
+            Trained base model (final state).
+        ema_model : eqx.Module or None
+            EMA model (None if EMA disabled).
         history : LDMTrainingHistory
             Training history with losses.
-
-        Notes
-        -----
-        For diffusion models, validation loss measures denoising performance
-        on held-out data. This is useful for monitoring training stability
-        but does NOT directly measure generation quality. Evaluate models
-        via visual inspection of samples, FID scores, or other metrics.
-
-        For production training, consider using 100% of data (val_loader=None)
-        after hyperparameter tuning.
         """
-        # Initialize optimizer state
+        cfg = self.config
         opt_state = self.optimizer.init(eqx.filter(self.model, eqx.is_array))
 
-        # JIT-compile training step for performance
+        # JIT-compile EDM training step
         @eqx.filter_jit
         def make_step(model, opt_state, x, cond, key):
-            loss, grads = eqx.filter_value_and_grad(diffusion_loss)(
+            loss, grads = eqx.filter_value_and_grad(edm_loss)(
                 model,
                 x,
                 cond,
-                self.schedules,
-                self.config.n_T,
+                cfg.sigma_data,
                 key,
-                self.config.dropout_p,
+                cfg.dropout_p,
+                cfg.p_mean,
+                cfg.p_std,
             )
             updates, opt_state = self.optimizer.update(grads, opt_state, model)
             model = eqx.apply_updates(model, updates)
             return model, opt_state, loss
 
-        # Training loop
-        key = jr.PRNGKey(self.config.random_seed)
+        key = jr.PRNGKey(cfg.random_seed)
 
-        for epoch in range(self.config.epochs):
+        for epoch in range(cfg.epochs):
             # ===== Training =====
             epoch_loss = 0.0
             n_samples = 0
@@ -410,6 +529,12 @@ class LatentDiffusionTrainer:
                     self.model, opt_state, x, cond, subkey
                 )
 
+                # Update EMA
+                if self.ema_model is not None:
+                    self.ema_model = ema_update_jit(
+                        self.ema_model, self.model, cfg.ema_decay
+                    )
+
                 bsz = len(x)
                 n_samples += bsz
                 epoch_loss += float(loss_value) * bsz
@@ -418,7 +543,7 @@ class LatentDiffusionTrainer:
             self.history.train_losses.append(epoch_loss)
 
             # ===== Validation =====
-            if val_loader is not None and epoch % self.config.validate_every == 0:
+            if val_loader is not None and epoch % cfg.validate_every == 0:
                 key, subkey = jr.split(key)
                 val_loss = self._evaluate(val_loader, subkey)
                 self.history.val_losses.append(float(val_loss))
@@ -429,50 +554,44 @@ class LatentDiffusionTrainer:
                     self.history.best_epoch = epoch
                     self.best_model = self.model
 
-                    # Save checkpoint if requested
-                    if self.config.save_best:
+                    if cfg.save_best:
                         self._save_checkpoint(epoch, val_loss)
 
-                # Print progress
-                if epoch % self.config.print_every == 0:
+                if epoch % cfg.print_every == 0:
                     print(
-                        f"Epoch {epoch:4d}/{self.config.epochs} | "
+                        f"Epoch {epoch:4d}/{cfg.epochs} | "
                         f"Train: {epoch_loss:.6f} | "
                         f"Val: {val_loss:.6f} | "
                         f"Best: {self.history.best_val_loss:.6f}"
                     )
-            elif epoch % self.config.print_every == 0:
-                # Print progress without validation
+            elif epoch % cfg.print_every == 0:
                 print(
-                    f"Epoch {epoch:4d}/{self.config.epochs} | " f"Train: {epoch_loss:.6f}"
+                    f"Epoch {epoch:4d}/{cfg.epochs} | Train: {epoch_loss:.6f}"
                 )
 
-        return self.model, self.history
+        return self.model, self.ema_model, self.history
 
     def _evaluate(self, val_loader, key: jax.random.PRNGKey) -> float:
         """
-        Evaluate model on validation set.
+        Evaluate on validation set using the same weighted EDM loss.
 
-        Parameters
-        ----------
-        val_loader : DataLoader
-            Validation data loader.
-        key : jax.random.PRNGKey
-            Random key for evaluation.
-
-        Returns
-        -------
-        float
-            Average validation loss.
+        Uses the base training model with CFG dropout disabled,
+        analogous to turning off regular dropout at evaluation time.
         """
         total_loss = 0.0
         n_samples = 0
 
         for x, cond in val_loader:
             key, subkey = jr.split(key)
-            # No dropout during evaluation
-            loss = diffusion_loss(
-                self.model, x, cond, self.schedules, self.config.n_T, subkey, dropout_p=0.0
+            loss = edm_loss(
+                self.model,
+                x,
+                cond,
+                self.config.sigma_data,
+                subkey,
+                cfg_dropout_p=0.0,
+                p_mean=self.config.p_mean,
+                p_std=self.config.p_std,
             )
             bsz = len(x)
             n_samples += bsz
@@ -481,55 +600,53 @@ class LatentDiffusionTrainer:
         return total_loss / n_samples
 
     def _save_checkpoint(self, epoch: int, val_loss: float) -> None:
-        """
-        Save model checkpoint with metadata using desisky.io.save.
-
-        The checkpoint includes full architecture information and training
-        metadata, enabling easy loading and reproducibility.
-
-        Parameters
-        ----------
-        epoch : int
-            Current epoch number.
-        val_loss : float
-            Current validation loss.
-        """
-        # Determine save directory (respects user's custom path)
+        """Save model checkpoint with metadata using desisky.io.save."""
         if self.config.save_dir is not None:
             save_dir = Path(self.config.save_dir)
         else:
             save_dir = Path.home() / ".cache" / "desisky" / "saved_models" / "ldm"
 
-        # Full save path (desisky.io.save will create parent directories)
         save_path = save_dir / f"{self.config.run_name}.eqx"
 
-        # Create metadata following desisky.io format
-        # NOTE: Architecture parameters should match your model creation
+        # Read architecture params from the model to ensure metadata
+        # always matches the actual model (fix from old hardcoded values)
         metadata = {
             "schema": 1,
             "arch": {
-                "in_ch": 1,
-                "out_ch": 1,
-                "meta_dim": self.config.meta_dim,  # Dynamic based on conditioning
-                "hidden": 32,  # Default from make_UNet1D_cond
-                "levels": 3,   # Default from make_UNet1D_cond
-                "emb_dim": 32,  # Default from make_UNet1D_cond
+                "in_ch": self.model.in_ch,
+                "out_ch": self.model.out_ch,
+                "meta_dim": self.model.meta_dim,
+                "hidden": self.model.hidden,
+                "levels": self.model.levels,
+                "emb_dim": self.model.emb_dim,
             },
             "training": {
                 "date": datetime.now().isoformat(),
                 "epoch": epoch,
                 "val_loss": float(val_loss),
                 "train_loss": float(self.history.train_losses[-1]),
+                "sigma_data": self.config.sigma_data,
+                **({"val_expids": self.config.val_expids}
+                   if self.config.val_expids is not None else {}),
+                **({"conditioning_scaler": self.config.conditioning_scaler}
+                   if self.config.conditioning_scaler is not None else {}),
                 "config": {
                     "epochs": self.config.epochs,
                     "learning_rate": self.config.learning_rate,
-                    "n_T": self.config.n_T,
                     "dropout_p": self.config.dropout_p,
                     "meta_dim": self.config.meta_dim,
+                    "p_mean": self.config.p_mean,
+                    "p_std": self.config.p_std,
+                    "ema_decay": self.config.ema_decay,
                 },
             },
         }
 
-        # Save using desisky.io.save (handles directory creation)
         save(save_path, self.model, metadata)
-        print(f"  💾 Saved checkpoint: {save_path}")
+        print(f"  Saved checkpoint: {save_path}")
+
+        # Also save EMA model if enabled
+        if self.ema_model is not None:
+            ema_path = save_dir / f"{self.config.run_name}_ema.eqx"
+            save(ema_path, self.ema_model, metadata)
+            print(f"  Saved EMA checkpoint: {ema_path}")
