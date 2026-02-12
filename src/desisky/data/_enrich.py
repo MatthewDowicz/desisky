@@ -390,7 +390,7 @@ def attach_solar_flux(
     mjd_col: str = "MJD",
     solar_time_col: str = "datetime",
     solar_flux_col: str = "fluxobsflux",
-    time_tolerance: str = "12H",
+    time_tolerance: str = "12h",
     download: bool = True,
     verbose: bool = True
 ) -> "pd.DataFrame":
@@ -417,7 +417,7 @@ def attach_solar_flux(
         Column name for datetime in solar_flux_df
     solar_flux_col : str, default "fluxobsflux"
         Column name for solar flux values in solar_flux_df
-    time_tolerance : str, default "12H"
+    time_tolerance : str, default "12h"
         Maximum time separation for valid matches (pandas Timedelta format)
     download : bool, default True
         If True and solar_flux_df is None, download data if not cached
@@ -474,6 +474,10 @@ def attach_solar_flux(
         origin="1858-11-17",
         unit="D"
     )
+
+    # Align datetime resolutions for pandas merge_asof compatibility
+    meta["datetime"] = meta["datetime"].astype("datetime64[us]")
+    sol[solar_time_col] = sol[solar_time_col].astype("datetime64[us]")
 
     # Sort for merge_asof (required)
     meta.sort_values("datetime", inplace=True)
