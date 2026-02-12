@@ -1,12 +1,12 @@
 """
-Sampling algorithms for Latent Diffusion Models.
+Sampling algorithms for Latent Diffusion Models using EDM (Karras et al. 2022).
 
 This module provides production-ready sampling functions for generating sky spectra
-using trained latent diffusion models. Three sampling algorithms are available:
+using trained latent diffusion models. Sampling uses:
 
-1. **DDPM** (Ho et al., 2020): Stochastic ancestral sampling
-2. **DDIM** (Song et al., 2020): Deterministic sampling with η=0
-3. **Heun** (Karras et al., 2022): Second-order probability-flow ODE solver (recommended)
+- **Karras sigma schedule**: Geometrically spaced noise levels
+- **Probability flow ODE**: dx/d_sigma = (x - D(x; sigma)) / sigma
+- **Heun solver**: Second-order method for better accuracy
 
 Examples
 --------
@@ -16,13 +16,17 @@ Basic usage:
 >>> from desisky.io import load_builtin
 >>>
 >>> # Load models
->>> ldm, _ = load_builtin("ldm_dark")
+>>> ldm, meta = load_builtin("ldm_dark")
 >>> vae, _ = load_builtin("vae")
 >>>
->>> # Create sampler
->>> sampler = LatentDiffusionSampler(ldm, vae, method="heun")
+>>> # Create sampler (sigma_data and scaler from training metadata)
+>>> sampler = LatentDiffusionSampler(
+...     ldm, vae,
+...     sigma_data=meta["training"]["sigma_data"],
+...     conditioning_scaler=meta["training"]["conditioning_scaler"],
+... )
 >>>
->>> # Generate samples
+>>> # Generate samples (raw conditioning is auto-normalized)
 >>> import jax.random as jr
 >>> conditioning = jnp.array([[60.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0]])
 >>> spectra = sampler.sample(
@@ -33,128 +37,89 @@ Basic usage:
 ... )
 >>> spectra.shape
 (10, 7781)
-
-Advanced usage with custom parameters:
-
->>> sampler = LatentDiffusionSampler(
-...     ldm,
-...     vae,
-...     method="ddim",
-...     num_steps=50,
-...     latent_channels=1,
-...     latent_dim=8
-... )
->>> spectra = sampler.sample(
-...     key=jr.PRNGKey(42),
-...     conditioning=my_conditions,
-...     n_samples=100,
-...     guidance_scale=3.0,
-...     return_latents=False
-... )
 """
 
-from typing import Literal, Tuple, Optional, Dict, Any
+from typing import Tuple, Optional
 import jax
 import jax.numpy as jnp
 import equinox as eqx
 from dataclasses import dataclass
 
+from desisky.models.ldm import (
+    edm_denoiser,
+    EDM_SIGMA_MIN,
+    EDM_SIGMA_MAX,
+)
+
 
 # =========================================================================
-# Noise Schedules
+# EDM Sigma Schedule (Karras et al. 2022)
 # =========================================================================
 
-def cosine_beta_schedule(T: int, s: float = 0.008) -> Dict[str, jnp.ndarray]:
+def get_sigmas_karras(
+    n_steps: int,
+    sigma_min: float = EDM_SIGMA_MIN,
+    sigma_max: float = EDM_SIGMA_MAX,
+    rho: float = 7.0,
+) -> jnp.ndarray:
     """
-    Cosine noise schedule from Nichol & Dhariwal (2021).
+    Karras et al. 2022 sigma schedule (Eq. 5).
 
-    Provides smoother noise progression compared to linear schedules.
+    Generates geometrically spaced sigma values from sigma_max down to 0,
+    with the spacing controlled by rho.
 
     Parameters
     ----------
-    T : int
-        Total number of timesteps
-    s : float
-        Small offset to prevent singularity at t=0 (default: 0.008 from paper)
+    n_steps : int
+        Number of sampling steps.
+    sigma_min : float
+        Minimum sigma value.
+    sigma_max : float
+        Maximum sigma value.
+    rho : float
+        Controls spacing (higher = more steps at low noise).
 
     Returns
     -------
-    dict
-        Dictionary containing all schedule components:
-        - beta_t: noise variance at each step
-        - alpha_t: 1 - beta_t
-        - alphabar_t: cumulative product of alphas
-        - sqrtab: sqrt(alphabar_t)
-        - sqrtmab: sqrt(1 - alphabar_t)
-        - oneover_sqrta: 1 / sqrt(alpha_t)
-        - sqrt_beta_t: sqrt(beta_t)
-        - mab_over_sqrtmab: (1 - alpha_t) / sqrt(1 - alphabar_t)
-        - sqrt_posterior_var: sqrt of posterior variance for DDPM
+    jnp.ndarray
+        Sigma schedule of shape (n_steps + 1,), ending with 0.
     """
-    t = jnp.linspace(0, T, T + 1, dtype=jnp.float32)
-    f = lambda t_: jnp.cos((t_ / T + s) / (1 + s) * jnp.pi / 2) ** 2
-    alphabar_t = f(t) / f(0)
-
-    beta_t = 1 - alphabar_t[1:] / alphabar_t[:-1]
-    beta_t = jnp.clip(beta_t, a_min=1e-5, a_max=0.999)
-    beta_t = jnp.concatenate([jnp.array([1e-5]), beta_t])
-
-    alpha_t = 1 - beta_t
-    log_alpha_t = jnp.log(alpha_t)
-    alphabar_t = jnp.exp(jnp.cumsum(log_alpha_t))
-
-    sqrtab = jnp.sqrt(alphabar_t)
-    sqrtmab = jnp.sqrt(1 - alphabar_t)
-    oneover_sqrta = 1 / jnp.sqrt(alpha_t)
-    sqrt_beta_t = jnp.sqrt(beta_t)
-    mab_over_sqrtmab_inv = (1 - alpha_t) / sqrtmab
-
-    # Posterior variance for DDPM
-    alphabar_tm1 = jnp.concatenate([jnp.array([1.0], dtype=jnp.float32),
-                                    alphabar_t[:-1]])
-    posterior_var = beta_t * (1 - alphabar_tm1) / (1 - alphabar_t)
-    sqrt_posterior_var = jnp.sqrt(jnp.clip(posterior_var, 1e-20, 1.0))
-
-    return {
-        "beta_t": beta_t,
-        "alpha_t": alpha_t,
-        "oneover_sqrta": oneover_sqrta,
-        "sqrt_beta_t": sqrt_beta_t,
-        "alphabar_t": alphabar_t,
-        "sqrtab": sqrtab,
-        "sqrtmab": sqrtmab,
-        "mab_over_sqrtmab": mab_over_sqrtmab_inv,
-        "sqrt_posterior_var": sqrt_posterior_var
-    }
+    ramp = jnp.linspace(0, 1, n_steps)
+    min_inv_rho = sigma_min ** (1 / rho)
+    max_inv_rho = sigma_max ** (1 / rho)
+    sigmas = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+    return jnp.concatenate([sigmas, jnp.array([0.0])])
 
 
 # =========================================================================
-# Classifier-Free Guidance
+# Classifier-Free Guidance for EDM
 # =========================================================================
 
-def guided_denoising_step(
+def guided_denoiser(
     model: eqx.Module,
-    x_t: jnp.ndarray,
-    t: jnp.ndarray,
+    x_noisy: jnp.ndarray,
+    sigma: jnp.ndarray,
     cond: jnp.ndarray,
-    guidance_scale: float = 2.0
+    sigma_data: float,
+    guidance_scale: float = 2.0,
 ) -> jnp.ndarray:
     """
-    Compute guided noise prediction using classifier-free guidance.
+    Classifier-free guidance for the EDM preconditioned denoiser.
 
-    Combines unconditional and conditional predictions:
-        ε̂ = ε_uncond + w * (ε_cond − ε_uncond)
+    D_guided = D_uncond + w * (D_cond - D_uncond)
 
     Parameters
     ----------
     model : eqx.Module
-        Diffusion model (UNet)
-    x_t : jnp.ndarray
-        Noisy latent at timestep t, shape (C, L)
-    t : jnp.ndarray
-        Normalized timestep (0 to 1), shape (1,)
+        Raw UNet network F_theta.
+    x_noisy : jnp.ndarray
+        Noisy latent, shape (C, L) -- single sample.
+    sigma : jnp.ndarray
+        Noise level (scalar).
     cond : jnp.ndarray
-        Conditioning metadata, shape (meta_dim,)
+        Conditioning metadata, shape (meta_dim,).
+    sigma_data : float
+        Standard deviation of training data.
     guidance_scale : float
         Guidance strength:
         - w=0: purely unconditional
@@ -164,135 +129,116 @@ def guided_denoising_step(
     Returns
     -------
     jnp.ndarray
-        Guided noise prediction, shape (C, L)
+        Guided denoised estimate, shape (C, L).
     """
-    eps_uncond = model(x_t, t, jnp.zeros_like(cond), key=None, dropout_p=0.0)
-    eps_cond = model(x_t, t, cond, key=None, dropout_p=0.0)
-    return eps_uncond + guidance_scale * (eps_cond - eps_uncond)
+    D_uncond = edm_denoiser(
+        model, x_noisy, sigma, jnp.zeros_like(cond), sigma_data, None, 0.0
+    )
+    D_cond = edm_denoiser(
+        model, x_noisy, sigma, cond, sigma_data, None, 0.0
+    )
+    return D_uncond + guidance_scale * (D_cond - D_uncond)
 
 
 # =========================================================================
-# Low-Level Sampling Functions
+# EDM Sampling with Heun Solver
 # =========================================================================
 
-def _make_schedule_indices(T: int, K: int) -> jnp.ndarray:
-    """Subsample T timesteps down to K evenly-spaced steps."""
-    return jnp.round(jnp.linspace(T, 1, K)).astype(jnp.int32)
-
-
-def _sample_ddpm(
-    key: jax.random.PRNGKey,
-    model: eqx.Module,
-    cond_vec: jnp.ndarray,
-    n_sample: int,
-    size: Tuple[int, int],
-    n_T: int,
-    guidance_scale: float
-) -> jnp.ndarray:
-    """DDPM ancestral sampling (stochastic)."""
-    schedules = cosine_beta_schedule(T=n_T)
-    x_i = jax.random.normal(key, (n_sample, *size))
-
-    guided_vmap = jax.vmap(guided_denoising_step, in_axes=(None, 0, 0, 0, None))
-
-    for i in range(n_T, 0, -1):
-        t = jnp.full((n_sample, 1), i / n_T, dtype=jnp.float32)
-        eps = guided_vmap(model, x_i, t, cond_vec, guidance_scale)
-        x_i = (schedules["oneover_sqrta"][i] *
-               (x_i - eps * schedules["mab_over_sqrtmab"][i]))
-
-        if i > 1:
-            key, subkey = jax.random.split(key)
-            z = jax.random.normal(subkey, x_i.shape)
-            x_i += schedules["sqrt_posterior_var"][i] * z
-
-    return x_i
-
-
 @eqx.filter_jit
-def _sample_ddim(
+def sample_edm(
     key: jax.random.PRNGKey,
     model: eqx.Module,
     cond_vec: jnp.ndarray,
     n_sample: int,
     size: Tuple[int, int],
-    n_T: int,
-    guidance_scale: float,
-    num_steps: int
+    sigma_data: float,
+    guidance_scale: float = 1.0,
+    num_steps: int = 100,
+    sigma_min: float = EDM_SIGMA_MIN,
+    sigma_max: float = EDM_SIGMA_MAX,
+    rho: float = 7.0,
 ) -> jnp.ndarray:
-    """DDIM sampling with η=0 (deterministic)."""
-    sched = cosine_beta_schedule(T=n_T)
-    sqrtab = sched["sqrtab"]
-    sqrtmab = sched["sqrtmab"]
+    """
+    EDM sampling with 2nd-order Heun solver.
 
-    idx_pairs = jnp.stack(
-        [_make_schedule_indices(n_T, num_steps)[:-1],
-         _make_schedule_indices(n_T, num_steps)[1:]],
-        axis=1,
+    Solves the probability flow ODE: dx/d_sigma = (x - D(x; sigma)) / sigma
+    using the Karras sigma schedule and Heun's method for second-order accuracy.
+
+    Parameters
+    ----------
+    key : jax.random.PRNGKey
+        Random key for initial noise.
+    model : eqx.Module
+        Raw UNet network F_theta.
+    cond_vec : jnp.ndarray
+        Conditioning vectors, shape (n_sample, meta_dim).
+    n_sample : int
+        Number of samples.
+    size : tuple of int
+        Sample size (channels, latent_dim), e.g. (1, 8).
+    sigma_data : float
+        Standard deviation of training data.
+    guidance_scale : float
+        CFG guidance weight.
+    num_steps : int
+        Number of solver steps.
+    sigma_min : float
+        Minimum sigma.
+    sigma_max : float
+        Maximum sigma.
+    rho : float
+        Sigma schedule spacing parameter.
+
+    Returns
+    -------
+    jnp.ndarray
+        Generated latent samples, shape (n_sample, channels, latent_dim).
+    """
+    sigmas = get_sigmas_karras(num_steps, sigma_min, sigma_max, rho)
+
+    # Initialize from noise at sigma_max
+    x_i = jax.random.normal(key, (n_sample, *size)) * sigmas[0]
+
+    # Sigma pairs for stepping: (sigma_cur, sigma_next)
+    sigma_pairs = jnp.stack([sigmas[:-1], sigmas[1:]], axis=1)
+
+    # Vectorized guided denoiser over batch
+    guided_vmap = jax.vmap(
+        guided_denoiser,
+        in_axes=(None, 0, None, 0, None, None),
     )
 
-    x_T = jax.random.normal(key, (n_sample, *size))
-    guided_vmap = jax.vmap(guided_denoising_step, in_axes=(None, 0, 0, 0, None))
+    def _heun_step(x_i, sigma_pair):
+        sigma_cur, sigma_next = sigma_pair[0], sigma_pair[1]
 
-    def _ddim_step(x_i, idx_pair):
-        i, i_prev = idx_pair
+        def do_step(x_i):
+            # Euler predictor
+            D_cur = guided_vmap(
+                model, x_i, sigma_cur, cond_vec, sigma_data, guidance_scale
+            )
+            d_cur = (x_i - D_cur) / sigma_cur
+            x_euler = x_i + (sigma_next - sigma_cur) * d_cur
 
-        t_i = jnp.full((n_sample, 1), i / n_T, dtype=jnp.float32)
-        eps_i = guided_vmap(model, x_i, t_i, cond_vec, guidance_scale)
+            # Heun corrector (if not at final step, i.e. sigma_next > 0)
+            def heun_correct(x_euler):
+                D_next = guided_vmap(
+                    model, x_euler, sigma_next, cond_vec,
+                    sigma_data, guidance_scale
+                )
+                d_next = (x_euler - D_next) / sigma_next
+                d_avg = 0.5 * (d_cur + d_next)
+                return x_i + (sigma_next - sigma_cur) * d_avg
 
-        # Predict x0
-        pred_x0 = (x_i - sqrtmab[i] * eps_i) / sqrtab[i]
+            return jax.lax.cond(
+                sigma_next > 0, heun_correct, lambda x: x_euler, x_euler
+            )
 
-        # DDIM update (η=0)
-        x_next = sqrtab[i_prev] * pred_x0 + sqrtmab[i_prev] * eps_i
-        return x_next, None
+        # Skip step if sigma_cur is effectively zero
+        return jax.lax.cond(
+            sigma_cur > 1e-8, do_step, lambda x: x, x_i
+        ), None
 
-    x_0, _ = jax.lax.scan(_ddim_step, x_T, idx_pairs)
-    return x_0
-
-
-@eqx.filter_jit
-def _sample_heun(
-    key: jax.random.PRNGKey,
-    model: eqx.Module,
-    cond_vec: jnp.ndarray,
-    n_sample: int,
-    size: Tuple[int, int],
-    n_T: int,
-    guidance_scale: float,
-    num_steps: int
-) -> jnp.ndarray:
-    """Heun's method for probability-flow ODE (deterministic, second-order)."""
-    sched = cosine_beta_schedule(T=n_T)
-    oa = sched["oneover_sqrta"]
-    mab_osm = sched["mab_over_sqrtmab"]
-
-    idx_pairs = jnp.stack(
-        [_make_schedule_indices(n_T, num_steps)[:-1],
-         _make_schedule_indices(n_T, num_steps)[1:]],
-        axis=1,
-    )
-
-    x_T = jax.random.normal(key, (n_sample, *size))
-    guided_vmap = jax.vmap(guided_denoising_step, in_axes=(None, 0, 0, 0, None))
-
-    def _heun_step(x_i, idx_pair):
-        i, i_prev = idx_pair
-
-        # Predictor (Euler step)
-        t_i = jnp.full((n_sample, 1), i / n_T, dtype=jnp.float32)
-        eps_i = guided_vmap(model, x_i, t_i, cond_vec, guidance_scale)
-        x_euler = oa[i] * (x_i - mab_osm[i] * eps_i)
-
-        # Corrector (average slopes)
-        t_prev = jnp.full((n_sample, 1), i_prev / n_T, dtype=jnp.float32)
-        eps_prev = guided_vmap(model, x_euler, t_prev, cond_vec, guidance_scale)
-        eps_avg = 0.5 * (eps_i + eps_prev)
-
-        x_next = oa[i_prev] * (x_i - mab_osm[i_prev] * eps_avg)
-        return x_next, None
-
-    x_0, _ = jax.lax.scan(_heun_step, x_T, idx_pairs)
+    x_0, _ = jax.lax.scan(_heun_step, x_i, sigma_pairs)
     return x_0
 
 
@@ -303,24 +249,27 @@ def _sample_heun(
 @dataclass
 class SamplerConfig:
     """
-    Configuration for latent diffusion sampling.
+    Configuration for EDM latent diffusion sampling.
 
     Attributes
     ----------
-    method : str
-        Sampling algorithm: "heun", "ddim", or "ddpm"
     num_steps : int
-        Number of sampling steps (for heun/ddim; ddpm always uses n_T steps)
-    n_T : int
-        Number of training timesteps (typically 1000)
+        Number of Heun solver steps.
+    sigma_min : float
+        Minimum sigma for Karras schedule.
+    sigma_max : float
+        Maximum sigma for Karras schedule.
+    rho : float
+        Sigma schedule spacing parameter.
     latent_channels : int
-        Number of channels in latent space (typically 1)
+        Number of channels in latent space (typically 1).
     latent_dim : int
-        Latent dimension (typically 8 for VAE)
+        Latent dimension (typically 8 for VAE).
     """
-    method: Literal["heun", "ddim", "ddpm"] = "heun"
-    num_steps: int = 40
-    n_T: int = 1000
+    num_steps: int = 100
+    sigma_min: float = EDM_SIGMA_MIN
+    sigma_max: float = EDM_SIGMA_MAX
+    rho: float = 7.0
     latent_channels: int = 1
     latent_dim: int = 8
 
@@ -329,26 +278,38 @@ class LatentDiffusionSampler:
     """
     High-level interface for sampling from latent diffusion models.
 
-    This class provides a clean, user-friendly API for generating sky spectra
-    using trained latent diffusion models. It handles all the complexity of
-    noise scheduling, classifier-free guidance, and VAE decoding.
+    Uses the EDM framework (Karras et al. 2022) with the Heun solver
+    and Karras sigma schedule. Handles classifier-free guidance and
+    VAE decoding.
 
     Parameters
     ----------
     ldm_model : eqx.Module
-        Trained latent diffusion model (UNet)
+        Trained latent diffusion model (raw UNet F_theta).
     vae_model : eqx.Module
-        Trained VAE for encoding/decoding
-    method : str
-        Sampling algorithm: "heun" (recommended), "ddim", or "ddpm"
+        Trained VAE for decoding latents to spectra.
+    sigma_data : float
+        Standard deviation of the training latents. This should match
+        the value used during training (stored in checkpoint metadata
+        under ``meta["training"]["sigma_data"]``).
+    conditioning_scaler : dict, optional
+        Conditioning feature normalization parameters from training.
+        If provided, raw conditioning inputs are automatically
+        standardized before sampling. Expected keys: ``"mean"`` and
+        ``"scale"`` (lists of per-feature values). Stored in checkpoint
+        metadata under ``meta["training"]["conditioning_scaler"]``.
     num_steps : int
-        Number of sampling steps (for heun/ddim)
-    n_T : int
-        Number of training timesteps
+        Number of Heun solver steps (more steps = higher quality).
+    sigma_min : float
+        Minimum sigma for Karras schedule.
+    sigma_max : float
+        Maximum sigma for Karras schedule.
+    rho : float
+        Sigma schedule spacing parameter.
     latent_channels : int
-        Number of latent channels (typically 1)
+        Number of latent channels (typically 1).
     latent_dim : int
-        Latent dimension (typically 8)
+        Latent dimension (typically 8).
 
     Examples
     --------
@@ -356,68 +317,62 @@ class LatentDiffusionSampler:
     >>> from desisky.io import load_builtin
     >>> import jax.random as jr
     >>>
-    >>> # Load models
-    >>> ldm, _ = load_builtin("ldm_dark")
+    >>> ldm, meta = load_builtin("ldm_dark")
     >>> vae, _ = load_builtin("vae")
     >>>
-    >>> # Create sampler
-    >>> sampler = LatentDiffusionSampler(ldm, vae)
-    >>>
-    >>> # Prepare conditioning (OBSALT, TRANSP, SUNALT, SOLFLUX, ECLLON, ECLLAT, GALLON, GALLAT)
-    >>> conditioning = jnp.array([
-    ...     [60.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0],
-    ...     [70.0, 0.85, -25.0, 155.0, 50.0, 12.0, 125.0, 6.0],
-    ... ])
-    >>>
-    >>> # Generate samples
-    >>> spectra = sampler.sample(
-    ...     key=jr.PRNGKey(0),
-    ...     conditioning=conditioning,
-    ...     guidance_scale=2.0
+    >>> sampler = LatentDiffusionSampler(
+    ...     ldm, vae,
+    ...     sigma_data=meta["training"]["sigma_data"],
+    ...     conditioning_scaler=meta["training"]["conditioning_scaler"],
     ... )
+    >>>
+    >>> cond = jnp.array([
+    ...     [60.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0],
+    ... ])
+    >>> spectra = sampler.sample(jr.PRNGKey(0), cond, guidance_scale=2.0)
     >>> spectra.shape
-    (2, 7781)
+    (1, 7781)
     """
 
     def __init__(
         self,
         ldm_model: eqx.Module,
         vae_model: eqx.Module,
-        method: Literal["heun", "ddim", "ddpm"] = "heun",
-        num_steps: int = 40,
-        n_T: int = 1000,
+        sigma_data: float,
+        conditioning_scaler: Optional[dict] = None,
+        num_steps: int = 100,
+        sigma_min: float = EDM_SIGMA_MIN,
+        sigma_max: float = EDM_SIGMA_MAX,
+        rho: float = 7.0,
         latent_channels: int = 1,
-        latent_dim: int = 8
+        latent_dim: int = 8,
     ):
         self.ldm = ldm_model
         self.vae = vae_model
+        self.sigma_data = sigma_data
+
+        # Conditioning normalization (StandardScaler params from training)
+        self._scaler_mean = None
+        self._scaler_scale = None
+        if conditioning_scaler is not None:
+            self._scaler_mean = jnp.array(conditioning_scaler["mean"])
+            self._scaler_scale = jnp.array(conditioning_scaler["scale"])
+
         self.config = SamplerConfig(
-            method=method,
             num_steps=num_steps,
-            n_T=n_T,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+            rho=rho,
             latent_channels=latent_channels,
-            latent_dim=latent_dim
+            latent_dim=latent_dim,
         )
-
-        # Select sampling function
-        self._samplers = {
-            "heun": _sample_heun,
-            "ddim": _sample_ddim,
-            "ddpm": _sample_ddpm
-        }
-
-        if method not in self._samplers:
-            raise ValueError(
-                f"Unknown sampling method '{method}'. "
-                f"Choose from: {list(self._samplers.keys())}"
-            )
 
     def sample_latents(
         self,
         key: jax.random.PRNGKey,
         conditioning: jnp.ndarray,
         n_samples: Optional[int] = None,
-        guidance_scale: float = 2.0
+        guidance_scale: float = 2.0,
     ) -> jnp.ndarray:
         """
         Sample latent representations from the diffusion model.
@@ -425,22 +380,25 @@ class LatentDiffusionSampler:
         Parameters
         ----------
         key : jax.random.PRNGKey
-            Random key for sampling
+            Random key for sampling.
         conditioning : jnp.ndarray
-            Conditioning metadata, shape (n_samples, meta_dim) or (meta_dim,)
+            Conditioning metadata, shape (n_samples, meta_dim) or (meta_dim,).
         n_samples : int, optional
-            Number of samples to generate. If None, inferred from conditioning shape.
+            Number of samples. If None, inferred from conditioning shape.
         guidance_scale : float
-            Classifier-free guidance strength (typical: 1-4)
+            Classifier-free guidance strength (typical: 1-4).
 
         Returns
         -------
         jnp.ndarray
-            Generated latents, shape (n_samples, latent_channels, latent_dim)
+            Generated latents, shape (n_samples, latent_channels, latent_dim).
         """
-        # Handle conditioning shape
         if conditioning.ndim == 1:
             conditioning = conditioning[None, :]
+
+        # Auto-normalize conditioning if scaler was provided
+        if self._scaler_mean is not None:
+            conditioning = (conditioning - self._scaler_mean) / self._scaler_scale
 
         if n_samples is None:
             n_samples = conditioning.shape[0]
@@ -450,27 +408,21 @@ class LatentDiffusionSampler:
                 f"({conditioning.shape[0]})"
             )
 
-        # Get sampling function
-        sample_fn = self._samplers[self.config.method]
-
-        # Sample
         latent_size = (self.config.latent_channels, self.config.latent_dim)
 
-        if self.config.method == "ddpm":
-            # DDPM doesn't use num_steps
-            latents = sample_fn(
-                key, self.ldm, conditioning,
-                n_samples, latent_size,
-                self.config.n_T, guidance_scale
-            )
-        else:
-            # DDIM and Heun use num_steps
-            latents = sample_fn(
-                key, self.ldm, conditioning,
-                n_samples, latent_size,
-                self.config.n_T, guidance_scale,
-                self.config.num_steps
-            )
+        latents = sample_edm(
+            key,
+            self.ldm,
+            conditioning,
+            n_samples,
+            latent_size,
+            self.sigma_data,
+            guidance_scale,
+            self.config.num_steps,
+            self.config.sigma_min,
+            self.config.sigma_max,
+            self.config.rho,
+        )
 
         return latents
 
@@ -480,57 +432,38 @@ class LatentDiffusionSampler:
         conditioning: jnp.ndarray,
         n_samples: Optional[int] = None,
         guidance_scale: float = 2.0,
-        return_latents: bool = False
+        return_latents: bool = False,
     ) -> jnp.ndarray | Tuple[jnp.ndarray, jnp.ndarray]:
         """
         Sample sky spectra from the latent diffusion model.
 
-        This is the main user-facing sampling method. It generates latent samples
-        and decodes them to full-resolution spectra.
+        Generates latent samples via EDM Heun solver and decodes them
+        to full-resolution spectra via the VAE.
 
         Parameters
         ----------
         key : jax.random.PRNGKey
-            Random key for sampling
+            Random key for sampling.
         conditioning : jnp.ndarray
-            Conditioning metadata, shape (n_samples, 8) or (8,)
-            Features: [OBSALT, TRANSP, SUNALT, SOLFLUX, ECLLON, ECLLAT, GALLON, GALLAT]
+            Conditioning metadata, shape (n_samples, meta_dim) or (meta_dim,).
         n_samples : int, optional
             Number of samples. If None, inferred from conditioning.
         guidance_scale : float
-            Guidance strength. Higher = stronger conditioning.
-            - 0: unconditional
-            - 1: standard conditional
-            - 2-4: typical range for good results
+            Guidance strength (higher = stronger conditioning).
         return_latents : bool
-            If True, return (spectra, latents). If False, return only spectra.
+            If True, return (spectra, latents).
 
         Returns
         -------
         spectra : jnp.ndarray
-            Generated sky spectra, shape (n_samples, 7781)
+            Generated sky spectra, shape (n_samples, 7781).
         latents : jnp.ndarray, optional
-            Generated latents (if return_latents=True), shape (n_samples, latent_channels, latent_dim)
-
-        Examples
-        --------
-        >>> # Single sample
-        >>> cond = jnp.array([60.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0])
-        >>> spec = sampler.sample(jr.PRNGKey(0), cond, guidance_scale=2.0)
-        >>>
-        >>> # Multiple samples
-        >>> conds = jnp.array([[60.0, 0.9, ...], [70.0, 0.85, ...]])
-        >>> specs = sampler.sample(jr.PRNGKey(1), conds, guidance_scale=3.0)
-        >>>
-        >>> # Return latents too
-        >>> specs, lats = sampler.sample(jr.PRNGKey(2), conds, return_latents=True)
+            Generated latents (if return_latents=True).
         """
-        # Sample latents
         latents = self.sample_latents(key, conditioning, n_samples, guidance_scale)
 
-        # Decode to spectra
         # VAE decoder expects shape (latent_dim,), so squeeze channel dimension
-        latents_squeezed = latents.squeeze(1)  # (n_samples, latent_dim)
+        latents_squeezed = latents.squeeze(1)
         spectra = jax.vmap(self.vae.decode)(latents_squeezed)
 
         if return_latents:
@@ -538,11 +471,14 @@ class LatentDiffusionSampler:
         return spectra
 
     def __repr__(self) -> str:
+        normalize = self._scaler_mean is not None
         return (
             f"LatentDiffusionSampler(\n"
-            f"  method={self.config.method},\n"
             f"  num_steps={self.config.num_steps},\n"
-            f"  n_T={self.config.n_T},\n"
-            f"  latent_shape=({self.config.latent_channels}, {self.config.latent_dim})\n"
+            f"  sigma_data={self.sigma_data},\n"
+            f"  sigma_range=[{self.config.sigma_min}, {self.config.sigma_max}],\n"
+            f"  rho={self.config.rho},\n"
+            f"  latent_shape=({self.config.latent_channels}, {self.config.latent_dim}),\n"
+            f"  auto_normalize={normalize}\n"
             f")"
         )

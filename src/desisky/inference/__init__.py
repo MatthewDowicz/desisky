@@ -3,13 +3,15 @@
 from .sampling import (
     LatentDiffusionSampler,
     SamplerConfig,
-    cosine_beta_schedule,
-    guided_denoising_step,
+    get_sigmas_karras,
+    guided_denoiser,
+    sample_edm,
 )
 
 __all__ = [
     "LatentDiffusionSampler",
     "SamplerConfig",
-    "cosine_beta_schedule",
-    "guided_denoising_step",
+    "get_sigmas_karras",
+    "guided_denoiser",
+    "sample_edm",
 ]
