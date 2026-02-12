@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-02-12
+
+### Added
+
+- EDM preconditioning framework (Karras et al. 2022) in `desisky.models.ldm`:
+  - Preconditioning functions (`c_skip`, `c_out`, `c_in`, `c_noise`) and `edm_denoiser` wrapper
+  - EDM constants (`EDM_SIGMA_MIN`, `EDM_SIGMA_MAX`, `EDM_P_MEAN`, `EDM_P_STD`)
+  - `compute_sigma_data` utility for computing training data standard deviation
+- EDM sampling via 2nd-order Heun ODE solver with Karras sigma schedule (`get_sigmas_karras`, `sample_edm`)
+- Automatic conditioning normalization in `LatentDiffusionSampler` via `conditioning_scaler` parameter
+- Conditioning normalization utilities (`fit_conditioning_scaler`, `normalize_conditioning`) in `desisky.training` — plain numpy, no scikit-learn dependency
+- EMA (Exponential Moving Average) model tracking during LDM training (decay=0.9999)
+- `val_expids` and `conditioning_scaler` stored in checkpoint metadata for reproducible inference
+- `get_validation_mask` utility in `desisky.data` for identifying held-out samples from checkpoint metadata
+- Tests for conditioning scaler utilities and validation mask
+- Updated example notebooks (`05_ldm_inference.ipynb`, `06_ldm_training.ipynb`) for EDM API
+
+### Changed
+
+- `LatentDiffusionTrainer.train()` now returns 3 values `(model, ema_model, history)` instead of 2
+- `LatentDiffusionSampler` now requires `sigma_data` parameter; `conditioning_scaler` enables auto-normalization of raw conditioning inputs
+- LDM training uses continuous log-normal sigma sampling and EDM-weighted loss instead of discrete cosine beta schedule
+- Retrained LDM checkpoints (`ldm_dark`, `ldm_moon`, `ldm_twilight`) with EDM framework — model sizes reduced from ~4.4 MB to ~1.3 MB
+
+### Removed
+
+- DDPM and DDIM sampling methods (`cosine_beta_schedule`, `guided_denoising_step`)
+- `method` parameter from `LatentDiffusionSampler` (EDM Heun solver is now the only sampler)
+- `n_T` parameter from `LDMTrainingConfig` (replaced by continuous `sigma_data`)
+
+### Fixed
+
+- `SkySpecVAC.get_sun_contaminated()` incorrectly used `MOONSEP` instead of `SUNSEP` for twilight filtering
+
 ## [0.3.0] - 2025-12-12
 
 ### Added
@@ -63,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for CPU and CUDA (GPU) installations
 - MIT License
 
-[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.3.0...HEAD
+[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MatthewDowicz/desisky/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MatthewDowicz/desisky/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/MatthewDowicz/desisky/releases/tag/v0.1.0
