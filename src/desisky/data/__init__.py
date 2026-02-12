@@ -4,6 +4,7 @@
 
 from .skyspec import SkySpecVAC, load_skyspec_vac, REGISTRY, DataSpec
 from ._core import default_root, download_file, sha256sum
+from ._splits import get_validation_mask
 from ._enrich import (
     compute_vband_magnitudes,
     load_eclipse_catalog,
@@ -29,4 +30,5 @@ __all__ = [
     "attach_solar_flux",
     "add_galactic_coordinates",
     "add_ecliptic_coordinates",
+    "get_validation_mask",
 ]
