@@ -64,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of `desisky` package
 - Pre-trained broadband model for V, g, r, z magnitude prediction from observational metadata (moon position, transparency, eclipse fraction)
-- Variational Autoencoder (VAE) for sky spectra compression (7,781 wavelength points → 8-dimensional latent space)
+- Variational Autoencoder (VAE) for sky spectra compression (7,781 wavelength bins → 8-dimensional latent space)
 - Latent Diffusion Model (LDM) for generating realistic dark-time night-sky emission spectra conditioned on 8 observational parameters
 - Data utilities for downloading and loading DESI DR1 Sky Spectra Value-Added Catalog (VAC) with automatic SHA-256 integrity verification
 - Subset filtering methods for different observing conditions:

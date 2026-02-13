@@ -12,8 +12,8 @@
 `desisky` provides machine learning models and tools for DESI sky modeling:
 
 1. **Predictive broadband model** - Predicts surface brightness in V, g, r, and z photometric bands from observational metadata (moon position, transparency, eclipse fraction)
-2. **Variational Autoencoder (VAE)** - Compresses sky spectra (7,781 wavelength points → 8-dimensional latent space) for analysis, anomaly detection, and dimensionality reduction
-3. **Latent Diffusion Models (LDM)** - Generates realistic night-sky emission spectra conditioned on observational parameters:
+2. **Variational Autoencoder (VAE)** - Compresses sky spectra (7,781 wavelength bins → 8-dimensional latent space) for analysis, anomaly detection, and dimensionality reduction
+3. **Latent Diffusion Models (LDM)** - Generates realistic night-sky emission spectra using EDM preconditioning (Karras et al. 2022), conditioned on observational parameters:
    - **LDM Dark** - Dark-time spectra conditioned on sun position, transparency, galactic/ecliptic coordinates, and solar flux
    - **LDM Moon** - Moon-contaminated spectra conditioned on moon position, separation, and illumination fraction
    - **LDM Twilight** - Twilight spectra conditioned on observation altitude, transparency, sun altitude, and sun separation
@@ -115,19 +115,21 @@ from desisky.inference import LatentDiffusionSampler
 import jax.random as jr
 import jax.numpy as jnp
 
-# Load pre-trained VAE and LDM
+# Load pre-trained VAE and LDM (metadata contains sigma_data and conditioning_scaler)
 vae, _ = load_builtin("vae")
-ldm, _ = load_builtin("ldm_dark")
+ldm, ldm_meta = load_builtin("ldm_dark")
 
-# Create sampler (Heun method recommended for quality)
+# Create sampler with EDM Heun solver
 sampler = LatentDiffusionSampler(
     ldm_model=ldm,
     vae_model=vae,
-    method="heun",
-    num_steps=1000
+    sigma_data=ldm_meta["training"]["sigma_data"],
+    conditioning_scaler=ldm_meta["training"]["conditioning_scaler"],
+    num_steps=100,
 )
 
 # Define conditioning: [OBSALT, TRANSP, SUNALT, SOLFLUX, ECLLON, ECLLAT, GALLON, GALLAT]
+# Raw values — the sampler auto-normalizes via the conditioning_scaler
 conditioning = jnp.array([
     [2100.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0],  # Dark sky conditions
 ])
@@ -136,7 +138,7 @@ conditioning = jnp.array([
 generated_spectra = sampler.sample(
     key=jr.PRNGKey(42),
     conditioning=conditioning,
-    guidance_scale=2.0
+    guidance_scale=2.0,
 )
 
 print(f"Generated spectrum shape: {generated_spectra.shape}")  # (1, 7781)
@@ -189,7 +191,7 @@ wave, flux, meta = vac.load_sun_contaminated()
 # Filtering criteria:
 # - SUNALT > -20° (Sun near or above horizon)
 # - MOONALT <= -5° (Moon below horizon)
-# - MOONSEP <= 110° (Sun-Moon separation)
+# - SUNSEP <= 110° (Sun separation)
 # - TRANSPARENCY_GFA > 0
 ```
 
@@ -236,7 +238,7 @@ desisky.io.save(
 
 **Available models:**
 - `"broadband"` - Multi-layer perceptron (6 inputs → 4 outputs) for V, g, r, z magnitude prediction from moon/transparency conditions
-- `"vae"` - Variational autoencoder (7781 → 8 → 7781) for sky spectra compression, reconstruction, and latent space analysis
+- `"vae"` - Variational autoencoder (7,781 → 8 → 7,781) for sky spectra compression, reconstruction, and latent space analysis
 - `"ldm_dark"` - Latent diffusion model (1D U-Net) for generating dark-time sky spectra conditioned on 8 observational parameters:
   - Conditioning: `[OBSALT, TRANSPARENCY_GFA, SUNALT, SOLFLUX, ECLLON, ECLLAT, GALLON, GALLAT]`
 - `"ldm_moon"` - Latent diffusion model (1D U-Net) for generating moon-contaminated sky spectra conditioned on 6 observational parameters:
@@ -299,6 +301,7 @@ See [examples/](examples/) directory for Jupyter notebooks demonstrating:
 - **[03_vae_analysis.ipynb](examples/03_vae_analysis.ipynb)** - Advanced VAE analysis: latent space interpolation and anomaly detection
 - **[04_vae_training.ipynb](examples/04_vae_training.ipynb)** - Train a VAE from scratch with InfoVAE-MMD objective
 - **[05_ldm_inference.ipynb](examples/05_ldm_inference.ipynb)** - Generate dark-time and moon-contaminated sky spectra using the latent diffusion models with custom conditioning
+- **[06_ldm_training.ipynb](examples/06_ldm_training.ipynb)** - Train an LDM from scratch with EDM framework, conditioning scaler, and EMA
 
 ## Development
 
@@ -340,19 +343,21 @@ desisky/
 │   │   └── _core.py     # Download utilities with SHA-256 verification
 │   ├── training/        # Training infrastructure
 │   │   ├── dataset.py   # PyTorch Dataset wrappers
+│   │   ├── ldm_trainer.py    # LDM training loop (EDM framework)
 │   │   ├── vae_trainer.py    # VAE training loop
 │   │   ├── losses.py         # Loss functions
 │   │   └── vae_losses.py     # InfoVAE-MMD loss
 │   ├── inference/       # Sampling algorithms
-│   │   └── sampling.py  # DDPM, DDIM, Heun samplers for LDM
+│   │   └── sampling.py  # EDM Heun ODE solver for LDM
 │   ├── visualization/   # Plotting utilities
 │   ├── scripts/         # CLI tools (desisky-data)
 │   └── weights/         # Pre-trained model weights (small models)
-├── tests/               # Comprehensive test suite (123+ tests)
+├── tests/               # Comprehensive test suite (242+ tests)
 │   ├── test_vae.py           # VAE unit tests
 │   ├── test_model_io.py      # Model I/O tests
 │   ├── test_enrichment.py    # Data enrichment tests
-│   ├── test_ldm_sampling.py  # LDM sampling tests
+│   ├── test_ldm_sampling.py  # LDM sampling tests (EDM)
+│   ├── test_ldm_training.py  # LDM training tests (EDM)
 │   └── ...                   # Other test modules
 ├── examples/            # Jupyter notebook tutorials
 │   ├── 00_quickstart.ipynb
@@ -360,7 +365,8 @@ desisky/
 │   ├── 02_vae_inference.ipynb
 │   ├── 03_vae_analysis.ipynb
 │   ├── 04_vae_training.ipynb
-│   └── 05_ldm_inference.ipynb
+│   ├── 05_ldm_inference.ipynb
+│   └── 06_ldm_training.ipynb
 └── pyproject.toml       # Package configuration
 ```
 
@@ -372,8 +378,10 @@ desisky/
 - **Integrity verification**: SHA-256 checksums for all downloaded files
 - **Subset filtering**: Easy access to dark-time, twilight, and moon-contaminated observations
 - **Data enrichment**: Automatic computation of V-band magnitudes, eclipse fractions, solar flux, and coordinate transformations
-- **Multiple sampling methods**: DDPM, DDIM, and Heun (probability-flow ODE) for LDM inference
-- **Comprehensive tests**: 123+ unit tests ensuring reliability
+- **EDM sampling**: 2nd-order Heun ODE solver with Karras sigma schedule for high-quality LDM inference
+- **Automatic conditioning normalization**: Built-in conditioning scaler for zero-mean, unit-variance normalization of observational inputs
+- **EMA model tracking**: Exponential moving average of model weights during training for stable inference
+- **Comprehensive tests**: 242+ unit tests ensuring reliability
 
 ## License
 
