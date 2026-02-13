@@ -17,8 +17,13 @@ from .ldm_trainer import (
     LatentDiffusionTrainer,
     LDMTrainingConfig,
     LDMTrainingHistory,
-    cosine_beta_schedule,
-    diffusion_loss,
+    edm_loss,
+    edm_loss_weight,
+    sample_edm_sigma,
+    ema_update,
+    ema_update_jit,
+    fit_conditioning_scaler,
+    normalize_conditioning,
 )
 
 __all__ = [
@@ -41,10 +46,15 @@ __all__ = [
     "VAETrainer",
     "VAETrainingConfig",
     "VAETrainingHistory",
-    # LDM training
+    # LDM training (EDM)
     "LatentDiffusionTrainer",
     "LDMTrainingConfig",
     "LDMTrainingHistory",
-    "cosine_beta_schedule",
-    "diffusion_loss",
+    "edm_loss",
+    "edm_loss_weight",
+    "sample_edm_sigma",
+    "ema_update",
+    "ema_update_jit",
+    "fit_conditioning_scaler",
+    "normalize_conditioning",
 ]

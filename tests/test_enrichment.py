@@ -621,7 +621,7 @@ class TestSkySpecVACEnrichment:
         # Verify filtering criteria
         assert (meta['SUNALT'] > -20).all(), "Sun contaminated requires SUNALT > -20"
         assert (meta['MOONALT'] <= -5).all(), "Sun contaminated requires MOONALT <= -5"
-        assert (meta['MOONSEP'] <= 110).all(), "Sun contaminated requires MOONSEP <= 110"
+        assert (meta['SUNSEP'] <= 110).all(), "Sun contaminated requires SUNSEP <= 110"
         assert (meta['TRANSPARENCY_GFA'] > 0).all(), "Sun contaminated requires valid transparency"
 
         # Verify enrichment

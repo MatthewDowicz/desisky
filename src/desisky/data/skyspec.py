@@ -357,7 +357,7 @@ class SkySpecVAC:
         suitable for training twilight sky models:
         - SUNALT > -20 (Sun near or above horizon - twilight)
         - MOONALT <= -5 (Moon below horizon to exclude moon contamination)
-        - MOONSEP <= 110 (Sun-Moon separation constraint)
+        - SUNSEP <= 110 (Sun-pointing angular separation constraint)
         - TRANSPARENCY_GFA > 0 (valid transparency measurements)
 
         Parameters
@@ -387,7 +387,7 @@ class SkySpecVAC:
         sun_mask = (
             (metadata['SUNALT'] > -20) &
             (metadata['MOONALT'] <= -5) &
-            (metadata['MOONSEP'] <= 110) &
+            (metadata['SUNSEP'] <= 110) &
             (metadata['TRANSPARENCY_GFA'] > 0)
         )
 

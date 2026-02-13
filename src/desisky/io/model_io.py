@@ -185,18 +185,18 @@ EXTERNAL_WEIGHTS = {
     },
     "ldm_dark": {
         "url": "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/ldm_dark.eqx",
-        "sha256": "bdc35965babe89276801596cd52db5530b5b2daaaeec559773e88cf36a98987d",
-        "size_mb": 4.4,
+        "sha256": "b3aefd0fa9a59dc65bcbded954122d4d21f95cdea43ca34111dc51a18109e0f0",
+        "size_mb": 1.33,
     },
     "ldm_moon": {
         "url": "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/ldm_moon.eqx",
-        "sha256": "12c89d9865fab4f34a7e72e402c45d60bfb4067f15760298d083f3b2f8e9d2db",
-        "size_mb": 4.39,
+        "sha256": "a6f875f743923cedea78ce451bcfac9b94733bc6f542defbb6be3cb208503ac9",
+        "size_mb": 1.32,
     },
     "ldm_twilight": {
         "url": "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/ldm_twilight.eqx",
-        "sha256": "08bd3f9b1b2d2707353c7faff41fab4ad76b9c4d75d1738ba02fcd0f7aaffe34",
-        "size_mb": 4.39,
+        "sha256": "d269d78dfa09c745ac1c19c5081d9895d9ad8b5e6c080675455d633cb89179a0",
+        "size_mb": 1.31,
     }
 }
 
