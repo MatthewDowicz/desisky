@@ -14,6 +14,14 @@ from ._enrich import (
     add_galactic_coordinates,
     add_ecliptic_coordinates,
 )
+from ._spectral import (
+    measure_airglow_intensities,
+    compute_broadband_mags,
+    LINE_BANDS,
+    AIRGLOW_CDF_NAMES,
+    BROADBAND_NAMES,
+    FLUX_SCALE,
+)
 
 __all__ = [
     "SkySpecVAC",
@@ -31,4 +39,10 @@ __all__ = [
     "add_galactic_coordinates",
     "add_ecliptic_coordinates",
     "get_validation_mask",
+    "measure_airglow_intensities",
+    "compute_broadband_mags",
+    "LINE_BANDS",
+    "AIRGLOW_CDF_NAMES",
+    "BROADBAND_NAMES",
+    "FLUX_SCALE",
 ]

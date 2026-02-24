@@ -411,7 +411,7 @@ def test_data_module_all_matches_exports():
     from desisky import data
 
     assert hasattr(data, "__all__")
-    assert len(data.__all__) == 15  # Updated to include get_validation_mask
+    assert len(data.__all__) == 21  # Includes spectral extraction exports
 
     for symbol in data.__all__:
         assert hasattr(data, symbol), f"__all__ contains {symbol} but it's not exported"
