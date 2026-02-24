@@ -15,10 +15,11 @@ Training uses the EDM framework (Karras et al. 2022):
 - Exponential Moving Average (EMA) of model weights for stable sampling
 """
 
+from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import equinox as eqx
@@ -33,6 +34,11 @@ from desisky.models.ldm import (
     EDM_P_MEAN,
     EDM_P_STD,
 )
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
 
 
 # ============================================================================
@@ -329,8 +335,16 @@ class LDMTrainingConfig:
         Std of EDM log-normal noise distribution.
     ema_decay : float
         EMA decay rate. Set to 0.0 to disable EMA.
+    early_stop_on_ema : bool
+        When True (default), compute validation loss on the EMA model
+        and use it for early stopping / best-model checkpointing.
+        Since the EMA model is the one used for inference, this is
+        generally the right metric to gate on.  When False, early
+        stopping uses the base (training) model's validation loss
+        (original behaviour).
     print_every : int
-        Print training progress every N epochs.
+        Print training progress every N epochs (fallback when tqdm
+        is not available).
     validate_every : int
         Validate every N epochs.
     save_best : bool
@@ -374,6 +388,7 @@ class LDMTrainingConfig:
     p_mean: float = EDM_P_MEAN
     p_std: float = EDM_P_STD
     ema_decay: float = 0.9999
+    early_stop_on_ema: bool = True
     print_every: int = 50
     validate_every: int = 1
     save_best: bool = True
@@ -398,15 +413,20 @@ class LDMTrainingHistory:
     train_losses : list[float]
         Weighted EDM training loss per epoch.
     val_losses : list[float]
-        Weighted EDM validation loss per epoch (no CFG dropout).
+        Weighted EDM validation loss per epoch (base model, no CFG dropout).
+    ema_val_losses : list[float]
+        Weighted EDM validation loss per epoch (EMA model, no CFG dropout).
+        Empty if EMA is disabled.
     best_val_loss : float
-        Best validation loss achieved.
+        Best validation loss achieved (EMA or base, depending on
+        ``early_stop_on_ema``).
     best_epoch : int
         Epoch where best validation loss was achieved.
     """
 
     train_losses: list[float] = field(default_factory=list)
     val_losses: list[float] = field(default_factory=list)
+    ema_val_losses: list[float] = field(default_factory=list)
     best_val_loss: float = float("inf")
     best_epoch: int = -1
 
@@ -425,11 +445,15 @@ class LatentDiffusionTrainer:
     - Exponential Moving Average (EMA) of model weights
     - Classifier-free guidance training via conditioning dropout
     - Automatic best-model checkpointing
+    - Optional Weights & Biases experiment tracking
+    - Optional ``on_epoch_end`` callback for custom visualization
 
     The EMA model is a smoothed copy of the training model used for
-    sampling and generation. All loss curves (training and validation)
-    are computed on the base training model so they are directly
-    comparable for diagnosing overfitting.
+    sampling and generation.  When ``config.early_stop_on_ema`` is True
+    (default), validation loss is computed on the EMA model and used for
+    early stopping / best-model saving.  Both base and EMA validation
+    losses are always recorded in the history (and logged to wandb when
+    enabled) so they can be compared.
 
     Parameters
     ----------
@@ -439,6 +463,16 @@ class LatentDiffusionTrainer:
         Training configuration (must include `sigma_data`).
     optimizer : optax.GradientTransformation, optional
         Custom optimizer. If None, uses Adam with config.learning_rate.
+    wandb_config : WandbConfig | None, default None
+        If provided, enables Weights & Biases experiment tracking.
+        Scalar metrics are logged every ``wandb_config.log_every`` epochs.
+        Requires ``pip install desisky[wandb]``.
+    on_epoch_end : callable | None, default None
+        Optional callback invoked after each validation step (or every
+        epoch if no val_loader is provided).
+        Signature: ``on_epoch_end(model, ema_model, history, epoch)``.
+        Use this to log custom visualizations (e.g. CDF plots,
+        conditional validation grids) to wandb or other tracking systems.
 
     Examples
     --------
@@ -456,6 +490,9 @@ class LatentDiffusionTrainer:
     ... )
     >>> trainer = LatentDiffusionTrainer(model, config)
     >>> trained_model, ema_model, history = trainer.train(train_loader, val_loader)
+    >>>
+    >>> # Or train on full dataset (no validation / early stopping)
+    >>> trained_model, ema_model, history = trainer.train(train_loader)
     """
 
     def __init__(
@@ -463,18 +500,61 @@ class LatentDiffusionTrainer:
         model: eqx.Module,
         config: LDMTrainingConfig,
         optimizer: Optional[optax.GradientTransformation] = None,
+        wandb_config: Any = None,
+        on_epoch_end: Optional[Callable] = None,
     ):
         self.model = model
         self.config = config
         self.optimizer = optimizer or optax.adam(config.learning_rate)
         self.history = LDMTrainingHistory()
         self.best_model = None
+        self.wandb_config = wandb_config
+        self.on_epoch_end = on_epoch_end
 
         # Initialize EMA model as a copy of the base model
         if config.ema_decay > 0.0:
             self.ema_model = model
         else:
             self.ema_model = None
+
+    def _extract_architecture(self) -> dict:
+        """Extract architecture parameters from the UNet model.
+
+        Returns
+        -------
+        arch : dict
+            Dictionary of architecture parameters.
+        """
+        return {
+            "in_ch": self.model.in_ch,
+            "out_ch": self.model.out_ch,
+            "meta_dim": self.model.meta_dim,
+            "hidden": self.model.hidden,
+            "levels": self.model.levels,
+            "emb_dim": self.model.emb_dim,
+        }
+
+    def _resolve_run_name(self) -> str:
+        """Determine the checkpoint filename.
+
+        Priority:
+        1. User explicitly set ``config.run_name`` (non-default) -> use it.
+        2. Default run_name AND wandb active -> use ``wandb.run.name``.
+        3. No wandb -> use ``config.run_name``.
+        """
+        user_set_name = self.config.run_name != "ldm_model"
+        if user_set_name:
+            return self.config.run_name
+
+        if self.wandb_config is not None:
+            try:
+                import wandb
+                if wandb.run is not None:
+                    return wandb.run.name
+            except ImportError:
+                pass
+
+        return self.config.run_name
 
     def train(self, train_loader, val_loader=None):
         """
@@ -485,7 +565,9 @@ class LatentDiffusionTrainer:
         train_loader : DataLoader
             Training data loader yielding (latents, conditioning) batches.
         val_loader : DataLoader, optional
-            Validation data loader. If None, trains without validation.
+            Validation data loader. If None, trains without validation
+            or early stopping (useful for final training on the full
+            dataset once hyperparameters are validated).
 
         Returns
         -------
@@ -496,6 +578,30 @@ class LatentDiffusionTrainer:
         history : LDMTrainingHistory
             Training history with losses.
         """
+        # Initialize wandb run if configured
+        if self.wandb_config is not None:
+            from .wandb_utils import init_wandb_run
+            model_config = self._extract_architecture()
+            run = init_wandb_run(self.wandb_config, self.config, model_config)
+            print(f"  wandb run: {run.url}")
+
+        # Run training loop inside try/finally to ensure wandb cleanup
+        # even if training crashes with an error
+        try:
+            return self._train_loop(train_loader, val_loader)
+        finally:
+            if self.wandb_config is not None:
+                from .wandb_utils import finish_wandb_run
+                try:
+                    import wandb
+                    if wandb.run is not None:
+                        print(f"  wandb run: {wandb.run.url}")
+                except ImportError:
+                    pass
+                finish_wandb_run()
+
+    def _train_loop(self, train_loader, val_loader):
+        """Core training loop, separated for clean wandb try/finally."""
         cfg = self.config
         opt_state = self.optimizer.init(eqx.filter(self.model, eqx.is_array))
 
@@ -518,7 +624,12 @@ class LatentDiffusionTrainer:
 
         key = jr.PRNGKey(cfg.random_seed)
 
-        for epoch in range(cfg.epochs):
+        # Build epoch iterator with optional tqdm progress bar
+        epoch_iter = range(cfg.epochs)
+        if tqdm is not None:
+            epoch_iter = tqdm(epoch_iter, desc="LDM Training")
+
+        for epoch in epoch_iter:
             # ===== Training =====
             epoch_loss = 0.0
             n_samples = 0
@@ -542,41 +653,111 @@ class LatentDiffusionTrainer:
             epoch_loss /= n_samples
             self.history.train_losses.append(epoch_loss)
 
+            # Log training metrics to wandb
+            if self.wandb_config is not None:
+                from .wandb_utils import log_epoch_metrics
+                if epoch % self.wandb_config.log_every == 0:
+                    log_epoch_metrics({"loss": epoch_loss}, epoch, prefix="train/")
+
             # ===== Validation =====
             if val_loader is not None and epoch % cfg.validate_every == 0:
                 key, subkey = jr.split(key)
-                val_loss = self._evaluate(val_loader, subkey)
+
+                # Always compute base model val loss
+                val_loss = self._evaluate(self.model, val_loader, subkey)
                 self.history.val_losses.append(float(val_loss))
 
+                # Compute EMA val loss if EMA is enabled
+                ema_val_loss = None
+                if self.ema_model is not None:
+                    key, subkey = jr.split(key)
+                    ema_val_loss = self._evaluate(self.ema_model, val_loader, subkey)
+                    self.history.ema_val_losses.append(float(ema_val_loss))
+
+                # Log validation metrics to wandb
+                if self.wandb_config is not None:
+                    from .wandb_utils import log_epoch_metrics
+                    if epoch % self.wandb_config.log_every == 0:
+                        val_metrics = {"loss": float(val_loss)}
+                        if ema_val_loss is not None:
+                            val_metrics["ema_loss"] = float(ema_val_loss)
+                        log_epoch_metrics(val_metrics, epoch, prefix="val/")
+
+                # Decide which loss to use for early stopping
+                if cfg.early_stop_on_ema and ema_val_loss is not None:
+                    gate_loss = ema_val_loss
+                else:
+                    gate_loss = val_loss
+
                 # Track and save best model
-                if val_loss < self.history.best_val_loss:
-                    self.history.best_val_loss = float(val_loss)
+                if gate_loss < self.history.best_val_loss:
+                    self.history.best_val_loss = float(gate_loss)
                     self.history.best_epoch = epoch
                     self.best_model = self.model
 
                     if cfg.save_best:
-                        self._save_checkpoint(epoch, val_loss)
+                        self._save_checkpoint(epoch, gate_loss)
 
-                if epoch % cfg.print_every == 0:
-                    print(
+                # Update tqdm postfix with current metrics
+                if tqdm is not None and isinstance(epoch_iter, tqdm):
+                    postfix = {
+                        "train": f"{epoch_loss:.4f}",
+                        "val": f"{float(val_loss):.4f}",
+                    }
+                    if ema_val_loss is not None:
+                        postfix["ema_val"] = f"{float(ema_val_loss):.4f}"
+                    postfix["best"] = f"{self.history.best_val_loss:.4f}"
+                    epoch_iter.set_postfix(postfix)
+
+                # Print progress (fallback when tqdm not available)
+                if tqdm is None and epoch % cfg.print_every == 0:
+                    msg = (
                         f"Epoch {epoch:4d}/{cfg.epochs} | "
                         f"Train: {epoch_loss:.6f} | "
-                        f"Val: {val_loss:.6f} | "
-                        f"Best: {self.history.best_val_loss:.6f}"
+                        f"Val: {val_loss:.6f}"
                     )
-            elif epoch % cfg.print_every == 0:
-                print(
-                    f"Epoch {epoch:4d}/{cfg.epochs} | Train: {epoch_loss:.6f}"
-                )
+                    if ema_val_loss is not None:
+                        msg += f" | EMA Val: {ema_val_loss:.6f}"
+                    msg += f" | Best: {self.history.best_val_loss:.6f}"
+                    print(msg)
+
+            elif val_loader is None:
+                # No validation -- update progress with train-only metrics
+                if tqdm is not None and isinstance(epoch_iter, tqdm):
+                    epoch_iter.set_postfix(train=f"{epoch_loss:.4f}")
+
+                if tqdm is None and epoch % cfg.print_every == 0:
+                    print(
+                        f"Epoch {epoch:4d}/{cfg.epochs} | "
+                        f"Train: {epoch_loss:.6f}"
+                    )
+
+            # Call on_epoch_end callback
+            if self.on_epoch_end is not None:
+                self.on_epoch_end(self.model, self.ema_model, self.history, epoch)
 
         return self.model, self.ema_model, self.history
 
-    def _evaluate(self, val_loader, key: jax.random.PRNGKey) -> float:
+    def _evaluate(self, eval_model, val_loader, key: jax.random.PRNGKey) -> float:
         """
-        Evaluate on validation set using the same weighted EDM loss.
+        Evaluate a model on the validation set using weighted EDM loss.
 
-        Uses the base training model with CFG dropout disabled,
-        analogous to turning off regular dropout at evaluation time.
+        CFG dropout is disabled during evaluation, analogous to turning
+        off regular dropout at evaluation time.
+
+        Parameters
+        ----------
+        eval_model : eqx.Module
+            Model to evaluate (base training model or EMA model).
+        val_loader : DataLoader
+            Validation data loader.
+        key : jax.random.PRNGKey
+            Random key for noise sampling.
+
+        Returns
+        -------
+        float
+            Average weighted EDM loss over the validation set.
         """
         total_loss = 0.0
         n_samples = 0
@@ -584,7 +765,7 @@ class LatentDiffusionTrainer:
         for x, cond in val_loader:
             key, subkey = jr.split(key)
             loss = edm_loss(
-                self.model,
+                eval_model,
                 x,
                 cond,
                 self.config.sigma_data,
@@ -606,20 +787,15 @@ class LatentDiffusionTrainer:
         else:
             save_dir = Path.home() / ".cache" / "desisky" / "saved_models" / "ldm"
 
-        save_path = save_dir / f"{self.config.run_name}.eqx"
+        # Use wandb run name when available and user didn't set a custom name
+        run_name = self._resolve_run_name()
+        save_path = save_dir / f"{run_name}.eqx"
 
         # Read architecture params from the model to ensure metadata
         # always matches the actual model (fix from old hardcoded values)
         metadata = {
             "schema": 1,
-            "arch": {
-                "in_ch": self.model.in_ch,
-                "out_ch": self.model.out_ch,
-                "meta_dim": self.model.meta_dim,
-                "hidden": self.model.hidden,
-                "levels": self.model.levels,
-                "emb_dim": self.model.emb_dim,
-            },
+            "arch": self._extract_architecture(),
             "training": {
                 "date": datetime.now().isoformat(),
                 "epoch": epoch,
@@ -643,10 +819,8 @@ class LatentDiffusionTrainer:
         }
 
         save(save_path, self.model, metadata)
-        print(f"  Saved checkpoint: {save_path}")
 
         # Also save EMA model if enabled
         if self.ema_model is not None:
-            ema_path = save_dir / f"{self.config.run_name}_ema.eqx"
+            ema_path = save_dir / f"{run_name}_ema.eqx"
             save(ema_path, self.ema_model, metadata)
-            print(f"  Saved EMA checkpoint: {ema_path}")
