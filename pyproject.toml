@@ -37,9 +37,10 @@ dependencies = [
 cpu    = ["jax", "equinox", "optax", "torch"]
 cuda12 = ["jax[cuda12]", "equinox", "optax", "torch"]
 data   = ["fitsio", "pandas", "speclite", "astropy"]
-train  = ["jax", "equinox", "optax", "torch"]
+train  = ["jax", "equinox", "optax", "torch", "tqdm"]
 viz    = ["matplotlib"]
-all    = ["jax", "equinox", "optax", "torch", "fitsio", "pandas", "speclite", "astropy", "matplotlib"]
+wandb  = ["wandb", "matplotlib"]
+all    = ["jax", "equinox", "optax", "torch", "tqdm", "fitsio", "pandas", "speclite", "astropy", "matplotlib", "wandb"]
 
 
 [project.scripts]
