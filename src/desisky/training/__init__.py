@@ -26,6 +26,21 @@ from .ldm_trainer import (
     normalize_conditioning,
 )
 
+# Wandb integration (optional -- requires pip install desisky[wandb])
+try:
+    from .wandb_utils import (
+        WandbConfig,
+        init_wandb_run,
+        log_epoch_metrics,
+        log_figure,
+        finish_wandb_run,
+        eval_per_sigma_losses,
+        DEFAULT_SIGMA_LEVELS,
+    )
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
+
 __all__ = [
     # Dataset utilities
     "SkyBrightnessDataset",
@@ -58,3 +73,15 @@ __all__ = [
     "fit_conditioning_scaler",
     "normalize_conditioning",
 ]
+
+# Add wandb exports if available
+if _WANDB_AVAILABLE:
+    __all__ += [
+        "WandbConfig",
+        "init_wandb_run",
+        "log_epoch_metrics",
+        "log_figure",
+        "finish_wandb_run",
+        "eval_per_sigma_losses",
+        "DEFAULT_SIGMA_LEVELS",
+    ]
