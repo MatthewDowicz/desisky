@@ -23,7 +23,7 @@ Before training the LDM, you need:
 3. **GPU recommended** — LDM training benefits significantly from CUDA acceleration
 
 ```bash
-pip install desisky[cuda12,data,train,viz]
+pip install desisky[cuda12,data,viz]
 ```
 
 ## Quick Start
