@@ -105,3 +105,6 @@ src/desisky/weights/ldm_dark.eqx
 
 # Solar flux data (can be downloaded or provided by user)
 src/desisky/data/solarflux-2004-2025.csv
+
+# Developer notes
+research.md
