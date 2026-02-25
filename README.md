@@ -48,17 +48,20 @@ Built with **JAX/Equinox** for high-performance model inference and designed to 
 ## Installation
 
 ```bash
-# Inference only (CPU)
-pip install desisky[cpu]
+# Default: inference-ready (CPU)
+pip install desisky
 
-# Inference + data loading (FITS files, enrichment)
-pip install desisky[cpu,data]
+# With data loading (FITS files, enrichment)
+pip install desisky[data]
 
-# Training with GPU + visualization
-pip install desisky[cuda12,data,train,viz]
+# GPU training + data + visualization
+pip install desisky[cuda12,data,viz]
 
-# Everything including W&B experiment tracking
+# Everything (CPU) including W&B experiment tracking
 pip install desisky[all]
+
+# Everything with GPU
+pip install desisky[all,cuda12]
 ```
 
 > **Note:** CUDA wheels may require manual installation. See the [JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html) for details.
@@ -67,15 +70,13 @@ pip install desisky[all]
 
 | Extra | Packages |
 |-------|----------|
-| `cpu` | jax, equinox, optax, torch |
-| `cuda12` | jax[cuda12], equinox, optax, torch |
+| `cuda12` | jax[cuda12], equinox, optax, torch, tqdm |
 | `data` | fitsio, pandas, speclite, astropy |
-| `train` | jax, equinox, optax, torch, tqdm |
 | `viz` | matplotlib |
-| `wandb` | wandb, matplotlib |
-| `all` | All of the above |
+| `wandb` | wandb, matplotlib, pandas |
+| `all` | All of the above (CPU JAX) |
 
-Core dependencies (always installed): numpy, scipy, requests
+Core dependencies (always installed): numpy, scipy, requests, jax, equinox
 
 ## Quick Start
 
@@ -391,7 +392,7 @@ Both trainers support:
 Optionally integrate with [Weights & Biases](https://wandb.ai/) for real-time experiment tracking and hyperparameter sweeps:
 
 ```bash
-pip install desisky[wandb,viz]
+pip install desisky[wandb]
 ```
 
 ```python
