@@ -14,25 +14,6 @@ The VAE learns to compress high-dimensional sky spectra (7781 wavelength bins) i
 
 ## Quick Start
 
-### Using the Command-Line Script
-
-The easiest way to train a VAE is using the provided script:
-
-```bash
-python -m desisky.scripts.train_vae --epochs 100 --beta 1e-3 --lam 4.0
-```
-
-This will:
-1. Download the DESI sky spectra VAC (if not already cached)
-2. Create a 90/10 train/test split
-3. Train a VAE with InfoVAE-MMD objective
-4. Save the best model checkpoint
-5. Generate training curves and example reconstructions
-
-### Using the Python API
-
-For more control, use the Python API directly:
-
 ```python
 import jax.random as jr
 import numpy as np
@@ -93,14 +74,14 @@ print(f"Best test loss: {history.best_test_loss:.6f}")
 
 ## InfoVAE-MMD Objective
 
-The training uses the **InfoVAE** objective function, which provides better control over the tradeoff between reconstruction quality and latent space regularization compared to standard β-VAE.
+The training uses the **InfoVAE** objective function, which provides better control over the tradeoff between reconstruction quality and latent space regularization compared to standard beta-VAE.
 
 ### Loss Function
 
 The total loss combines three terms:
 
 ```
-L = Reconstruction + β·KL + (λ-β)·MMD
+L = Reconstruction + beta * KL + (lam - beta) * MMD
 ```
 
 Where:
@@ -110,24 +91,21 @@ Where:
 
 ### Hyperparameter Guide
 
-**β (beta)** - Weight for KL divergence
+**beta** — Weight for KL divergence
 - Controls how much the encoder distribution matches the prior
-- Lower β → better reconstruction, less regularization
+- Lower beta → better reconstruction, less regularization
 - Typical values: 1e-4 to 1e-2
 - **Recommended**: 1e-3
 
-**λ (lambda)** - Total latent regularization weight
+**lam (lambda)** — Total latent regularization weight
 - Controls overall latent space structure
-- Higher λ → more structured latent space
+- Higher lam → more structured latent space
+- The MMD term receives weight (lam - beta)
 - Typical values: 1.0 to 10.0
 - **Recommended**: 4.0
 
-**MMD weight** - Automatically computed as (λ - β)
-- Ensures aggregated posterior matches prior distribution
-- More robust than KL alone
-
-**Kernel sigma** - RBF kernel bandwidth for MMD
-- Set to `"auto"` to use heuristic σ = √(2/latent_dim)
+**kernel_sigma** — RBF kernel bandwidth for MMD
+- Set to `"auto"` to use heuristic: sigma = sqrt(2 / latent_dim)
 - Can specify explicit float value
 - **Recommended**: "auto"
 
@@ -228,15 +206,86 @@ plt.tight_layout()
 plt.show()
 ```
 
+## W&B Experiment Tracking
+
+Add Weights & Biases logging to track training in real time:
+
+```python
+from desisky.training import WandbConfig
+
+wandb_config = WandbConfig(project="desisky-vae", tags=["experiment-1"])
+
+trainer = VAETrainer(model, config, wandb_config=wandb_config)
+trained_model, history = trainer.train(train_loader, test_loader)
+```
+
+This logs all loss components (train/val reconstruction, KL, MMD) to your W&B dashboard every epoch.
+
+### Custom Visualization with on_epoch_end
+
+Use the `on_epoch_end` callback to log reconstruction plots, latent corner plots, or any other custom visualization:
+
+```python
+from desisky.visualization import plot_vae_reconstructions, plot_latent_corner
+from desisky.training import log_figure
+
+def on_epoch_end(model, history, epoch):
+    # Log reconstruction examples
+    fig = plot_vae_reconstructions(originals, reconstructions, wavelength)
+    log_figure("viz/reconstructions", fig, epoch)
+
+    # Log latent space corner plot
+    fig = plot_latent_corner(means, logvars, metadata)
+    log_figure("viz/latents", fig, epoch)
+
+trainer = VAETrainer(
+    model, config,
+    wandb_config=wandb_config,
+    on_epoch_end=on_epoch_end,
+)
+```
+
+### Hyperparameter Sweeps
+
+```python
+import wandb
+
+sweep_config = {
+    "method": "bayes",
+    "metric": {"name": "val/total", "goal": "minimize"},
+    "parameters": {
+        "learning_rate": {"min": 1e-5, "max": 1e-3},
+        "beta": {"values": [1e-4, 1e-3, 1e-2]},
+        "lam": {"values": [2.0, 4.0, 8.0]},
+    },
+}
+
+sweep_id = wandb.sweep(sweep_config, project="desisky-vae")
+
+def train_sweep():
+    config = VAETrainingConfig(
+        epochs=50,
+        learning_rate=wandb.config.learning_rate,
+        beta=wandb.config.beta,
+        lam=wandb.config.lam,
+    )
+    trainer = VAETrainer(model, config, wandb_config=WandbConfig(project="desisky-vae"))
+    trainer.train(train_loader, test_loader)
+
+wandb.agent(sweep_id, function=train_sweep, count=20)
+```
+
+See `examples/07_vae_wandb_training.ipynb` for a complete working example.
+
 ## Model Checkpoints
 
 Models are automatically saved in the Equinox format with metadata:
 
 ```python
-from desisky.io import load
+from desisky.io import load_model
 
 # Load trained model
-model, meta = load('~/.cache/desisky/saved_models/vae/my_vae_model.eqx')
+model, meta = load_model("vae", path="~/.cache/desisky/saved_models/vae/my_vae_model.eqx")
 
 # Inspect metadata
 print(meta['arch'])           # Architecture: in_channels, latent_dim
@@ -257,6 +306,7 @@ Checkpoint metadata includes:
 Compress spectra to latent vectors:
 
 ```python
+import jax
 import jax.numpy as jnp
 
 # Single spectrum
@@ -265,7 +315,6 @@ mean, logvar = model.encode(spectrum)
 print(f"Latent mean shape: {mean.shape}")  # (8,)
 
 # Batch of spectra
-import jax
 spectra_batch = jnp.array(flux[:100])  # Shape: (100, 7781)
 means, logvars = jax.vmap(model.encode)(spectra_batch)
 print(f"Latent means shape: {means.shape}")  # (100, 8)
@@ -282,8 +331,7 @@ reconstructed = model.decode(latent)
 print(f"Reconstructed shape: {reconstructed.shape}")  # (7781,)
 
 # Batch reconstruction
-latents_batch = means
-reconstructed_batch = jax.vmap(model.decode)(latents_batch)
+reconstructed_batch = jax.vmap(model.decode)(means)
 print(f"Batch reconstructed shape: {reconstructed_batch.shape}")  # (100, 7781)
 ```
 
@@ -297,11 +345,6 @@ import jax.random as jr
 # Single spectrum with sampling
 result = model(spectrum, jr.PRNGKey(0))
 print(result.keys())  # dict_keys(['mean', 'logvar', 'latent', 'output'])
-
-# Batch processing
-results = model(spectra_batch, jr.PRNGKey(0))
-print(results['latent'].shape)  # (100, 8)
-print(results['output'].shape)  # (100, 7781)
 ```
 
 ### Latent Space Interpolation
@@ -309,8 +352,6 @@ print(results['output'].shape)  # (100, 7781)
 Generate intermediate sky conditions:
 
 ```python
-import jax.numpy as jnp
-
 # Encode two different sky conditions
 mean1, _ = model.encode(flux[0])
 mean2, _ = model.encode(flux[100])
@@ -330,10 +371,6 @@ print(f"Interpolated spectra shape: {interpolated_spectra.shape}")  # (10, 7781)
 
 ```python
 import optax
-
-# SGD with momentum
-optimizer = optax.sgd(learning_rate=1e-3, momentum=0.9)
-trainer = VAETrainer(model, config, optimizer=optimizer)
 
 # Adam with gradient clipping
 optimizer = optax.chain(
@@ -358,7 +395,6 @@ model_16d = make_SkyVAE(in_channels=7781, latent_dim=16, key=jr.PRNGKey(42))
 ```python
 import jax.numpy as jnp
 
-# Compute reconstruction error
 def reconstruction_error(model, spectra):
     """Compute per-spectrum reconstruction MSE."""
     reconstructed = jax.vmap(lambda x: model(x, jr.PRNGKey(0))['output'])(spectra)
@@ -373,21 +409,11 @@ print(f"Std reconstruction error: {errors.std():.6f}")
 print(f"Max reconstruction error: {errors.max():.6f}")
 ```
 
-## Best Practices
-
-1. **Data Preprocessing**: Ensure flux is `float32` for JAX compatibility
-2. **Batch Size**: 64 works well for most cases; increase if you have memory
-3. **Learning Rate**: 1e-4 is a good default; reduce if training is unstable
-4. **Validation**: Monitor test reconstruction loss to avoid overfitting
-5. **Hyperparameters**: Start with β=1e-3, λ=4.0 and adjust based on reconstruction quality
-6. **Random Seeds**: Set for reproducibility across runs
-7. **Checkpointing**: Always save best model for later use
-
 ## Troubleshooting
 
 **High reconstruction error**
-- Decrease β (e.g., from 1e-3 to 1e-4)
-- Decrease λ (e.g., from 4.0 to 2.0)
+- Decrease beta (e.g., from 1e-3 to 1e-4)
+- Decrease lam (e.g., from 4.0 to 2.0)
 - Increase latent_dim (e.g., from 8 to 16)
 - Train for more epochs
 
@@ -398,7 +424,7 @@ print(f"Max reconstruction error: {errors.max():.6f}")
 - Check input data for extreme values
 
 **Poor latent space structure**
-- Increase β and λ for stronger regularization
+- Increase beta and lam for stronger regularization
 - Train for more epochs to converge
 - Ensure kernel_sigma="auto" is being used
 
@@ -415,9 +441,8 @@ print(f"Max reconstruction error: {errors.max():.6f}")
 
 ## API Reference
 
-See the full API documentation:
-- `desisky.training.VAETrainer`: Main training class
-- `desisky.training.VAETrainingConfig`: Training configuration
-- `desisky.training.vae_loss_infovae`: InfoVAE-MMD loss function
-- `desisky.models.vae.SkyVAE`: VAE model architecture
-- `desisky.models.vae.make_SkyVAE`: Model constructor
+- `desisky.training.VAETrainer` — Main training class
+- `desisky.training.VAETrainingConfig` — Training configuration
+- `desisky.training.vae_loss_infovae` — InfoVAE-MMD loss function
+- `desisky.models.vae.SkyVAE` — VAE model architecture
+- `desisky.models.vae.make_SkyVAE` — Model constructor

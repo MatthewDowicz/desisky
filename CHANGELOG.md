@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-02-18
+
+### Added
+
+- **Weights & Biases experiment tracking** as optional dependency (`pip install desisky[wandb]`):
+  - `WandbConfig` dataclass for configuring project, entity, tags, logging frequency
+  - `init_wandb_run()` — sweep-aware run initialization (reuses active run inside `wandb.agent`)
+  - `log_epoch_metrics()`, `log_figure()`, `finish_wandb_run()` — logging helpers
+  - `eval_per_sigma_losses()` — compute EDM loss at fixed sigma levels for diagnostics
+- **Spectral analysis module** `desisky.data._spectral`:
+  - `measure_airglow_intensities()` — continuum-subtracted airglow emission line intensities (10 lines + 2 composites, following Noll et al. 2012)
+  - `compute_broadband_mags()` — V, g, r, z broadband magnitudes via speclite
+  - Constants: `LINE_BANDS`, `AIRGLOW_CDF_NAMES`, `BROADBAND_NAMES`, `FLUX_SCALE`
+- **New visualization functions** in `desisky.visualization.wandb_plots` (all return matplotlib Figures, wandb-agnostic):
+  - `plot_vae_reconstructions()` — original vs reconstructed spectra
+  - `plot_latent_corner()` — corner/pair-plot of latent dimensions, colored by sky condition
+  - `plot_latent_corner_comparison()` — corner plot comparing two latent distributions (e.g. real vs generated) with per-dimension EMD annotation
+  - `plot_cdf_comparison()` — CDF + histogram with Wasserstein-1 (EMD) annotation
+  - `plot_conditional_validation_grid()` — feature statistics vs conditioning variable with 16-84% CI bands
+  - `plot_broadband_cdfs()` — broadband magnitude CDF comparison (convenience wrapper)
+  - `plot_airglow_cdfs()` — airglow line intensity CDF comparison (convenience wrapper)
+- `on_epoch_end` callback parameter on both `VAETrainer` and `LatentDiffusionTrainer` for custom per-epoch visualization logging
+- `LDMTrainingConfig.early_stop_on_ema` parameter (default `True`) — early stopping and best-model saving gate on EMA validation loss instead of base model loss
+- `LDMTrainingHistory.ema_val_losses` field — tracks EMA model validation loss per epoch
+- Both base and EMA validation losses are now always computed and logged when EMA is enabled
+- `tqdm` progress bar in both trainers (auto-detected; falls back to `print_every` when tqdm is unavailable)
+- Example notebooks:
+  - `07_vae_wandb_training.ipynb` — VAE training with wandb tracking, reconstruction plots, latent corner plots, and sweep example
+  - `08_ldm_wandb_training.ipynb` — LDM training with wandb tracking, CDF comparisons, conditional validation grids, and sweep example
+- Tests: `test_wandb_utils.py`, `test_wandb_plots.py`, `test_spectral.py`
+
+### Changed
+
+- `VAETrainer.train()` and `LatentDiffusionTrainer.train()` now accept optional `val_loader=None` / `test_loader=None` to train without validation (useful for final training on the full dataset after hyperparameters are validated)
+- Trainers internally split into `train()` (wandb lifecycle with try/finally) and `_train_loop()` (core loop) for clean resource cleanup
+- Checkpoint naming priority: user-specified `run_name` > wandb auto-generated name > default
+- `LatentDiffusionTrainer._evaluate()` now takes an `eval_model` parameter to evaluate either the base or EMA model
+
 ## [0.4.0] - 2026-02-12
 
 ### Added
@@ -97,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for CPU and CUDA (GPU) installations
 - MIT License
 
-[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.4.0...HEAD
+[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/MatthewDowicz/desisky/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MatthewDowicz/desisky/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MatthewDowicz/desisky/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/MatthewDowicz/desisky/releases/tag/v0.1.0
