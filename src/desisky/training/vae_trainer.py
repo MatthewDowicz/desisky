@@ -7,7 +7,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 from datetime import datetime
 import warnings
 
@@ -21,6 +21,11 @@ from torch.utils.data import DataLoader
 
 from .vae_losses import vae_loss_infovae, default_kernel_sigma
 from desisky.io import save as save_model
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
 
 
 @dataclass
@@ -170,6 +175,16 @@ class VAETrainer:
     optimizer : optax.GradientTransformation | None, default None
         Optax optimizer. If None, uses Adam with config.learning_rate.
         If config.clip_gradients=True, gradient clipping is added automatically.
+    wandb_config : WandbConfig | None, default None
+        If provided, enables Weights & Biases experiment tracking.
+        Scalar metrics are logged every ``wandb_config.log_every`` epochs.
+        Requires ``pip install desisky[wandb]``.
+    on_epoch_end : callable | None, default None
+        Optional callback invoked after each validation step (or every epoch
+        if no test_loader is provided).
+        Signature: ``on_epoch_end(model, history, epoch)``.
+        Use this to log custom visualizations (e.g. reconstruction plots,
+        latent corner plots) to wandb or other tracking systems.
 
     Attributes
     ----------
@@ -200,13 +215,12 @@ class VAETrainer:
     ...     run_name="sky_vae_v1"
     ... )
     >>>
-    >>> # Train
+    >>> # Train with validation
     >>> trainer = VAETrainer(model, config)
     >>> model, history = trainer.train(train_loader, test_loader)
     >>>
-    >>> # Inspect results
-    >>> print(f"Best test loss: {history.best_test_loss:.4f}")
-    >>> print(f"Final reconstruction: {history.test_recon[-1]:.4f}")
+    >>> # Or train on full dataset (no validation)
+    >>> model, history = trainer.train(train_loader)
     """
 
     def __init__(
@@ -214,9 +228,13 @@ class VAETrainer:
         model: eqx.Module,
         config: VAETrainingConfig,
         optimizer: Optional[optax.GradientTransformation] = None,
+        wandb_config: Any = None,
+        on_epoch_end: Optional[Callable] = None,
     ):
         self.model = model
         self.config = config
+        self.wandb_config = wandb_config
+        self.on_epoch_end = on_epoch_end
 
         # Build optimizer with optional gradient clipping
         if optimizer is None:
@@ -231,10 +249,32 @@ class VAETrainer:
         self.optimizer = optimizer
         self.history = VAETrainingHistory(config=config)
 
+    def _resolve_run_name(self) -> str:
+        """Determine the checkpoint filename.
+
+        Priority:
+        1. User explicitly set ``config.run_name`` (non-default) -> use it.
+        2. Default run_name AND wandb active -> use ``wandb.run.name``.
+        3. No wandb -> use ``config.run_name``.
+        """
+        user_set_name = self.config.run_name != "vae_training"
+        if user_set_name:
+            return self.config.run_name
+
+        if self.wandb_config is not None:
+            try:
+                import wandb
+                if wandb.run is not None:
+                    return wandb.run.name
+            except ImportError:
+                pass
+
+        return self.config.run_name
+
     def train(
         self,
         train_loader: DataLoader,
-        test_loader: DataLoader,
+        test_loader: Optional[DataLoader] = None,
     ) -> tuple[eqx.Module, VAETrainingHistory]:
         """
         Train the VAE model on the provided data loaders.
@@ -244,8 +284,9 @@ class VAETrainer:
         train_loader : DataLoader
             DataLoader for the training set. Should yield batches of spectra.
             Can use NumpyLoader from desisky.training for JAX compatibility.
-        test_loader : DataLoader
-            DataLoader for the test/validation set.
+        test_loader : DataLoader | None, default None
+            DataLoader for the test/validation set. If None, trains without
+            validation (useful for final training on the full dataset).
 
         Returns
         -------
@@ -253,22 +294,35 @@ class VAETrainer:
             Trained VAE model (best checkpoint if config.save_best=True).
         history : VAETrainingHistory
             Training history with all loss components and metadata.
-
-        Examples
-        --------
-        >>> model, history = trainer.train(train_loader, test_loader)
-        >>> print(f"Training complete!")
-        >>> print(f"Best test loss: {history.best_test_loss:.4f} at epoch {history.best_epoch}")
-        >>>
-        >>> # Plot training curves
-        >>> import matplotlib.pyplot as plt
-        >>> plt.plot(history.train_losses, label='Train')
-        >>> plt.plot(history.test_losses, label='Test')
-        >>> plt.xlabel('Epoch')
-        >>> plt.ylabel('Loss')
-        >>> plt.legend()
-        >>> plt.show()
         """
+        # Initialize wandb run if configured
+        if self.wandb_config is not None:
+            from .wandb_utils import init_wandb_run
+            model_config = self._extract_architecture()
+            run = init_wandb_run(self.wandb_config, self.config, model_config)
+            print(f"  wandb run: {run.url}")
+
+        # Run training loop inside try/finally to ensure wandb cleanup
+        # even if training crashes with an error
+        try:
+            return self._train_loop(train_loader, test_loader)
+        finally:
+            if self.wandb_config is not None:
+                from .wandb_utils import finish_wandb_run
+                try:
+                    import wandb
+                    if wandb.run is not None:
+                        print(f"  wandb run: {wandb.run.url}")
+                except ImportError:
+                    pass
+                finish_wandb_run()
+
+    def _train_loop(
+        self,
+        train_loader: DataLoader,
+        test_loader: Optional[DataLoader],
+    ) -> tuple[eqx.Module, VAETrainingHistory]:
+        """Core training loop, separated for clean wandb try/finally."""
         # Initialize optimizer state
         opt_state = self.optimizer.init(eqx.filter(self.model, eqx.is_array))
 
@@ -296,8 +350,13 @@ class VAETrainer:
         # Random key for sampling
         key = jr.PRNGKey(self.config.random_seed)
 
+        # Build epoch iterator with optional tqdm progress bar
+        epoch_iter = range(self.config.epochs)
+        if tqdm is not None:
+            epoch_iter = tqdm(epoch_iter, desc="VAE Training")
+
         # Main training loop
-        for epoch in range(self.config.epochs):
+        for epoch in epoch_iter:
             # Accumulators for epoch statistics
             epoch_loss = 0.0
             epoch_recon = 0.0
@@ -339,8 +398,20 @@ class VAETrainer:
             self.history.train_kl.append(epoch_kl)
             self.history.train_mmd.append(epoch_mmd)
 
-            # Validation step
-            if epoch % self.config.validate_every == 0:
+            # Log training metrics to wandb
+            if self.wandb_config is not None:
+                from .wandb_utils import log_epoch_metrics
+                if epoch % self.wandb_config.log_every == 0:
+                    log_epoch_metrics({
+                        "loss": epoch_loss,
+                        "recon": epoch_recon,
+                        "kl": epoch_kl,
+                        "mmd": epoch_mmd,
+                        "loss_z": epoch_kl + epoch_mmd,
+                    }, epoch, prefix="train/")
+
+            # Validation step (if test_loader provided)
+            if test_loader is not None and epoch % self.config.validate_every == 0:
                 key, subkey = jr.split(key)
                 test_loss, test_aux = self._evaluate(test_loader, subkey, kernel_sigma)
 
@@ -350,6 +421,18 @@ class VAETrainer:
                 self.history.test_kl.append(float(test_aux["kl_weighted"]))
                 self.history.test_mmd.append(float(test_aux["mmd_weighted"]))
 
+                # Log validation metrics to wandb
+                if self.wandb_config is not None:
+                    from .wandb_utils import log_epoch_metrics
+                    if epoch % self.wandb_config.log_every == 0:
+                        log_epoch_metrics({
+                            "loss": float(test_loss),
+                            "recon": float(test_aux["recon"]),
+                            "kl": float(test_aux["kl_weighted"]),
+                            "mmd": float(test_aux["mmd_weighted"]),
+                            "loss_z": float(test_aux.get("loss_z", 0)),
+                        }, epoch, prefix="val/")
+
                 # Check if this is the best model
                 if test_loss < self.history.best_test_loss:
                     self.history.best_test_loss = float(test_loss)
@@ -358,14 +441,37 @@ class VAETrainer:
                     if self.config.save_best:
                         self._save_checkpoint(epoch, test_loss, test_aux)
 
-                # Print progress
-                if epoch % self.config.print_every == 0:
+                # Update tqdm postfix with current metrics
+                if tqdm is not None and isinstance(epoch_iter, tqdm):
+                    epoch_iter.set_postfix(
+                        train=f"{epoch_loss:.4f}",
+                        test=f"{float(test_loss):.4f}",
+                        best=f"{self.history.best_test_loss:.4f}",
+                    )
+
+                # Print progress (fallback when tqdm not available)
+                if tqdm is None and epoch % self.config.print_every == 0:
                     print(
                         f"Epoch {epoch:4d}/{self.config.epochs} | "
                         f"Train: {epoch_loss:.6f} (R:{epoch_recon:.4f} KL:{epoch_kl:.4f} MMD:{epoch_mmd:.4f}) | "
                         f"Test: {test_loss:.6f} (R:{test_aux['recon']:.4f}) | "
                         f"Best: {self.history.best_test_loss:.6f}"
                     )
+
+            elif test_loader is None:
+                # No validation -- update progress with train-only metrics
+                if tqdm is not None and isinstance(epoch_iter, tqdm):
+                    epoch_iter.set_postfix(train=f"{epoch_loss:.4f}")
+
+                if tqdm is None and epoch % self.config.print_every == 0:
+                    print(
+                        f"Epoch {epoch:4d}/{self.config.epochs} | "
+                        f"Train: {epoch_loss:.6f}"
+                    )
+
+            # Call on_epoch_end callback
+            if self.on_epoch_end is not None:
+                self.on_epoch_end(self.model, self.history, epoch)
 
         return self.model, self.history
 
@@ -462,7 +568,10 @@ class VAETrainer:
             save_dir = Path(self.config.save_dir)
 
         save_dir.mkdir(parents=True, exist_ok=True)
-        save_path = save_dir / f"{self.config.run_name}.eqx"
+
+        # Use wandb run name when available and user didn't set a custom name
+        run_name = self._resolve_run_name()
+        save_path = save_dir / f"{run_name}.eqx"
 
         # Extract model architecture
         arch = self._extract_architecture()

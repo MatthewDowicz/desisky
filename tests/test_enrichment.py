@@ -6,10 +6,28 @@
 Tests for VAC enrichment functionality (_enrich.py module and SkySpecVAC enrichment).
 """
 
+import socket
+
 import pytest
 import numpy as np
 import pandas as pd
 from pathlib import Path
+
+
+def _nasa_reachable(host="eclipse.gsfc.nasa.gov", port=443, timeout=5):
+    """Return True if NASA eclipse server is reachable (best-effort check)."""
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.close()
+        return True
+    except OSError:
+        return False
+
+
+_skip_no_nasa = pytest.mark.skipif(
+    not _nasa_reachable(),
+    reason="NASA eclipse server (eclipse.gsfc.nasa.gov) unreachable",
+)
 
 
 class TestVBandComputation:
@@ -68,6 +86,7 @@ class TestVBandComputation:
 class TestEclipseCatalog:
     """Tests for eclipse catalog loading."""
 
+    @_skip_no_nasa
     def test_load_eclipse_catalog_downloads(self, tmp_path, monkeypatch):
         """Test that eclipse catalog downloads if missing."""
         from desisky.data._enrich import load_eclipse_catalog
@@ -96,6 +115,7 @@ class TestEclipseCatalog:
         with pytest.raises(FileNotFoundError, match="Eclipse catalog not found"):
             load_eclipse_catalog(catalog_path=fake_path, download=False)
 
+    @_skip_no_nasa
     def test_eclipse_catalog_contact_times(self):
         """Test that contact times are computed correctly."""
         from desisky.data._enrich import load_eclipse_catalog
@@ -122,6 +142,7 @@ class TestEclipseCatalog:
 class TestEclipseFractionComputation:
     """Tests for ECLIPSE_FRAC computation."""
 
+    @_skip_no_nasa
     def test_eclipse_fraction_shape(self):
         """Test that eclipse fraction returns correct shape."""
         from desisky.data._enrich import compute_eclipse_fraction
@@ -140,6 +161,7 @@ class TestEclipseFractionComputation:
         assert np.all(result >= 0)
         assert np.all(result <= 1)
 
+    @_skip_no_nasa
     def test_eclipse_fraction_zeros_outside_eclipses(self):
         """Test that eclipse fraction is zero for times with no eclipses."""
         from desisky.data._enrich import compute_eclipse_fraction
