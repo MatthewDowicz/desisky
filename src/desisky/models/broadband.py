@@ -19,8 +19,8 @@ def make_broadbandMLP(*, in_size: int, out_size: int, width_size: int, depth: in
         key=key
     )
 
-# Register this model kind with the IO registry. The resource path is relative to
-# the 'desisky.weights' package (i.e., 'src/desisky/weights/broadband_weights.eqx')
+# Register this model kind with the IO registry. The resource is the filename
+# used for HuggingFace download and local cache (e.g., ~/.desisky/models/broadband/)
 register_model(
     "broadband",
     ModelSpec(constructor=make_broadbandMLP, resource="broadband_weights.eqx"),

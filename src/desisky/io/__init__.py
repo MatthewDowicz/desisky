@@ -26,7 +26,7 @@ def load_model(
     path: Optional[str | Path] = None,
     constructor: Optional[Callable[..., Any]] = None,
 ) -> Tuple[Any, dict]:
-    """Load a user checkpoint (if `path` given) or the packaged/builtin weights for `kind`."""
+    """Load a user checkpoint (if `path` given) or the pre-trained weights for `kind`."""
     _ensure_registered(kind)
     return load_or_builtin(kind, path=path, constructor=constructor)
 
