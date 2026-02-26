@@ -293,10 +293,12 @@ export DESISKY_DATA_DIR=/path/to/data
 
 ### Loading and saving models
 
+All pre-trained weights are hosted on [HuggingFace](https://huggingface.co/datasets/mjdowicz/desisky) and downloaded automatically on first use:
+
 ```python
 import desisky
 
-# Load packaged pre-trained weights
+# Load pre-trained weights (downloads from HuggingFace on first use)
 model, meta = desisky.io.load_model("broadband")
 
 # Load from a user checkpoint
@@ -315,6 +317,17 @@ desisky.io.save(
 ```
 
 Checkpoints use a JSON header (architecture + training metadata) followed by binary Equinox-serialized weights.
+
+By default, downloaded weights are cached in `~/.desisky/models/<kind>/`. Override with:
+
+```bash
+export DESISKY_CACHE_DIR=/path/to/cache   # shell
+```
+
+```python
+import os
+os.environ["DESISKY_CACHE_DIR"] = "/path/to/cache"  # Python / notebook
+```
 
 ## Training
 
@@ -488,14 +501,8 @@ desisky/
 │   ├── visualization/          # Plotting
 │   │   ├── plots.py            #   Loss curves, outlier analysis
 │   │   └── wandb_plots.py      #   Reconstructions, corner plots, CDFs, validation grids
-│   ├── scripts/                # CLI tools
-│   │   └── download_data.py    #   desisky-data command
-│   └── weights/                # Pre-trained model weights
-│       ├── broadband_weights.eqx
-│       ├── vae_weights.eqx
-│       ├── ldm_dark.eqx
-│       ├── ldm_moon.eqx
-│       └── ldm_twilight.eqx
+│   └── scripts/                # CLI tools
+│       └── download_data.py    #   desisky-data command
 ├── tests/                      # 277 unit tests
 ├── examples/                   # 9 Jupyter notebooks
 ├── docs/                       # Additional documentation

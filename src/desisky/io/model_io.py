@@ -1,4 +1,3 @@
-from importlib import resources as res
 from pathlib import Path
 from typing import Any, Dict, Tuple, Callable, Optional
 import json
@@ -10,7 +9,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ModelSpec:
     """
-    Specification for a model type that can be loaded from packaged weights.
+    Specification for a registered model type.
 
     Attributes:
     -----------
@@ -20,8 +19,8 @@ class ModelSpec:
         The returned object must have the same PyTree structure that the checkpoint expects
         so that ``equinox.tree_deserialise_leaves`` can load parameters into it.
     resource : str
-        Relative path inside the :mod:`desisky.weights` package where the serialized
-        weights file resides (e.g., ``"broadband.eqx"``).
+        Filename for the weights file, used as the HuggingFace resource name
+        and local cache filename (e.g., ``"broadband_weights.eqx"``).
     """
     constructor: Callable[..., Any]
     resource: str 
@@ -173,11 +172,16 @@ def load(path: str | Path, constructor) -> Tuple[Any, Dict[str, Any]]:
     
 
 # -------------------------
-# External weights management (for large models >50MB)
+# External weights management (pre-trained models on HuggingFace)
 # -------------------------
 
-# Download URLs for models that exceed GitHub's 50MB size limit
+# Download URLs for pre-trained model weights hosted on HuggingFace
 EXTERNAL_WEIGHTS = {
+    "broadband": {
+        "url": "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/broadband_weights.eqx",
+        "sha256": "ed355fd0577db3c022dd31ffa79acbca5774d558e19b2bdd6dee269af6394cf1",
+        "size_mb": 0.27,
+    },
     "vae": {
         "url": "https://huggingface.co/datasets/mjdowicz/desisky/resolve/main/vae_weights.eqx",
         "sha256": "638948543d7c2dcadd42efbc62c9558f9f9779440aa97bd47220a3c91e42d607",
@@ -285,43 +289,68 @@ def _download_model_weights(kind: str, dest: Path) -> None:
         raise
 
 # -------------------------
-# Public API: packaged/builtin weights
+# Public API: builtin weights
 # -------------------------
 
-def load_builtin(kind: str) -> Tuple[Any, Dict[str, Any]]:
+def _resolve_cache_dir(kind: str) -> Path:
     """
-    Load packaged weights for a registered ``kind`` from :mod:`desisky.weights`.
+    Resolve the cache directory for downloading pre-trained weights.
 
-    For large models (>50MB), weights are automatically downloaded from external
-    storage on first use to avoid GitHub repository size limits.
+    Priority order:
+    1. ``DESISKY_CACHE_DIR`` environment variable (if set)
+    2. Default: ``~/.desisky/models/<kind>/``
 
     Parameters
     ----------
     kind : str
-        Registered model kind (e.g., 'broadband', 'vae')
+        Model kind (used as subfolder name in the default path).
+
+    Returns
+    -------
+    Path
+        Resolved cache directory.
+    """
+    import os
+    env_dir = os.getenv("DESISKY_CACHE_DIR")
+    if env_dir:
+        return Path(env_dir) / kind
+
+    from desisky.data._core import default_root
+    return default_root() / "models" / kind
+
+
+def load_builtin(kind: str) -> Tuple[Any, Dict[str, Any]]:
+    """
+    Load pre-trained weights for a registered ``kind``.
+
+    Weights are downloaded from HuggingFace on first use and cached locally.
+    Subsequent calls load from cache.
+
+    The cache location defaults to ``~/.desisky/models/<kind>/`` and can be
+    overridden by setting the ``DESISKY_CACHE_DIR`` environment variable::
+
+        export DESISKY_CACHE_DIR=/scratch/weights   # shell
+        os.environ["DESISKY_CACHE_DIR"] = "/scratch/weights"  # Python / notebook
+
+    Parameters
+    ----------
+    kind : str
+        Registered model kind (e.g., ``'broadband'``, ``'vae'``, ``'ldm_dark'``)
 
     Returns
     -------
     (model, meta) : tuple[Any, dict[str, Any]]
         Loaded model and normalized metadata dictionary
 
-    Notes
-    -----
-    Small model weights (<50MB) are packaged with the library.
-    Large model weights are downloaded on first use from Hugging Face and cached
-    in ``~/.desisky/models/``. Downloaded weights persist across sessions.
-
     Examples
     --------
     >>> from desisky.io import load_builtin
-    >>> vae, meta = load_builtin("vae")  # Downloads on first use
-    >>> print(meta['arch'])
-    {'in_channels': 7781, 'latent_dim': 8}
+    >>> vae, meta = load_builtin("vae")
 
     Raises
     ------
     KeyError
-        If ``kind`` is not registered
+        If ``kind`` is not registered or has no external weights configured
     ValueError
         If download fails or checksum verification fails
     """
@@ -330,43 +359,40 @@ def load_builtin(kind: str) -> Tuple[Any, Dict[str, Any]]:
 
     spec = REGISTRY[kind]
 
-    # Check if this model requires external download
-    if kind in EXTERNAL_WEIGHTS:
-        # Use user's cache directory for downloaded weights
-        from desisky.data._core import default_root
-        cache_dir = default_root() / "models" / kind
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        weights_file = cache_dir / spec.resource
+    if kind not in EXTERNAL_WEIGHTS:
+        raise KeyError(
+            f"Model '{kind}' is registered but has no external weights configured. "
+            f"Provide a checkpoint path via load_model('{kind}', path=...)"
+        )
 
-        # Download if not already cached
-        if not weights_file.exists():
-            _download_model_weights(kind, weights_file)
+    resolved_cache = _resolve_cache_dir(kind)
+    resolved_cache.mkdir(parents=True, exist_ok=True)
+    weights_file = resolved_cache / spec.resource
 
-        # Load from cache
-        return load(weights_file, constructor=spec.constructor)
+    # Download if not already cached
+    if not weights_file.exists():
+        _download_model_weights(kind, weights_file)
 
-    else:
-        # Load from packaged weights (small models)
-        weights_path = res.files("desisky.weights").joinpath(spec.resource)
-        with weights_path.open("rb") as f:
-            return _read_header_and_deserialize(f, spec.constructor)
-    
+    # Load from cache
+    return load(weights_file, constructor=spec.constructor)
+
+
 def load_or_builtin(kind: str,
                     path: Optional[str | Path] = None,
                     constructor: Optional[Callable[..., Any]] = None
                     ) -> Tuple[Any, Dict[str, Any]]:
     """
-    Load a user checkpoint from ``path`` if provided; otherwise load the packaged weights
+    Load a user checkpoint from ``path`` if provided; otherwise load the builtin weights
     registered under ``kind``.
 
     Parameters
     ----------
     kind : str
-        Registry key for the model (used for packaged weights and, by default,
+        Registry key for the model (used for builtin weights lookup and, by default,
         to look up the constructor).
     path : str | Path | None
         Optional filesystem path to a user checkpoint created by :func:`save`.
-        If provided, this takes precedence over packaged weights.
+        If provided, this takes precedence over builtin weights.
     constructor : Callable[..., Any] | None
         Optional explicit constructor. If omitted and ``path`` is given, the constructor
         will be taken from the registry entry for ``kind``.
@@ -391,15 +417,15 @@ def load_or_builtin(kind: str,
 
 def register_model(kind: str, spec: ModelSpec) -> None:
     """
-    Register a model kind (constructor + packaged resource path).
+    Register a model kind (constructor + resource filename).
 
     Typical usage
     -------------
-    In your package import path (e.g., :mod:`desisky.__init__` or a model submodule) do:
+    In a model submodule (e.g., ``desisky/models/broadband.py``) do:
 
     >>> from desisky.io.model_io import register_model, ModelSpec
-    >>> from desisky.broadband import make_MLP
-    >>> register_model("broadband", ModelSpec(make_MLP, "broadband_weights.eqx"))
+    >>> from desisky.models.broadband import make_broadbandMLP
+    >>> register_model("broadband", ModelSpec(make_broadbandMLP, "broadband_weights.eqx"))
     """
     REGISTRY[kind] = spec 
     
