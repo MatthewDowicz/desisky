@@ -44,7 +44,13 @@ all    = ["desisky[data,viz,wandb]", "optax", "torch", "tqdm"]
 
 
 [project.scripts]
-desisky-data = "desisky.scripts.download_data:main"
+desisky-data             = "desisky.scripts.download_data:main"
+desisky-train-broadband  = "desisky.scripts.train_broadband:main"
+desisky-train-vae        = "desisky.scripts.train_vae:main"
+desisky-train-ldm        = "desisky.scripts.train_ldm:main"
+desisky-infer-broadband  = "desisky.scripts.infer_broadband:main"
+desisky-infer-vae        = "desisky.scripts.infer_vae:main"
+desisky-infer-ldm        = "desisky.scripts.infer_ldm:main"
 
 [project.urls]
 Documentation = "https://github.com/MatthewDowicz/desisky#readme"
