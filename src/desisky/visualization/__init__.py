@@ -4,7 +4,7 @@
 
 """Visualization utilities for DESI sky brightness models."""
 
-from .plots import plot_loss_curve, plot_nn_outlier_analysis
+from .plots import plot_loss_curve, plot_nn_outlier_analysis, plot_broadband_band_panel
 from .wandb_plots import (
     plot_vae_reconstructions,
     plot_latent_corner,
@@ -18,6 +18,7 @@ from .wandb_plots import (
 __all__ = [
     "plot_loss_curve",
     "plot_nn_outlier_analysis",
+    "plot_broadband_band_panel",
     "plot_vae_reconstructions",
     "plot_latent_corner",
     "plot_latent_corner_comparison",
