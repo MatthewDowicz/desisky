@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from .losses import loss_func
 from .dataset import gather_full_data
 from desisky.io import save as save_model
+from .wandb_utils import WandbConfig
 
 
 @dataclass
@@ -149,11 +150,33 @@ class BroadbandTrainer:
         model: eqx.Module,
         config: TrainingConfig,
         optimizer: Optional[optax.GradientTransformation] = None,
+        wandb_config: Optional[WandbConfig] = None,
+        on_epoch_end: Optional[callable] = None,
     ):
         self.model = model
         self.config = config
         self.optimizer = optimizer or optax.adam(config.learning_rate)
+        self.wandb_config = wandb_config
+        self.on_epoch_end = on_epoch_end
         self.history = TrainingHistory(config=config)
+
+    def _resolve_run_name(self) -> str:
+        """Determine checkpoint filename (mirrors VAETrainer pattern).
+
+        If the user explicitly set run_name (differs from default), use it.
+        Otherwise fall back to the wandb-generated run name when available.
+        """
+        user_changed_default = self.config.run_name != "broadband_training"
+        if user_changed_default:
+            return self.config.run_name
+        if self.wandb_config is not None:
+            try:
+                import wandb
+                if wandb.run is not None:
+                    return wandb.run.name
+            except ImportError:
+                pass
+        return self.config.run_name
 
     def train(
         self,
@@ -162,6 +185,9 @@ class BroadbandTrainer:
     ) -> tuple[eqx.Module, TrainingHistory]:
         """
         Train the model on the provided data loaders.
+
+        Initializes wandb (if configured), runs the training loop,
+        and ensures wandb is finalized on exit.
 
         Parameters
         ----------
@@ -182,6 +208,33 @@ class BroadbandTrainer:
         >>> model, history = trainer.train(train_loader, test_loader)
         >>> print(f"Best test loss: {history.best_test_loss:.4f} at epoch {history.best_epoch}")
         """
+        # Initialize wandb run if configured
+        if self.wandb_config is not None:
+            from .wandb_utils import init_wandb_run
+            model_config = self._extract_architecture()
+            run = init_wandb_run(self.wandb_config, self.config, model_config)
+            print(f"  wandb run: {run.url}")
+
+        try:
+            return self._train_loop(train_loader, test_loader)
+        finally:
+            # Ensure wandb is properly finalized
+            if self.wandb_config is not None:
+                from .wandb_utils import finish_wandb_run
+                try:
+                    import wandb
+                    if wandb.run is not None:
+                        print(f"  wandb run: {wandb.run.url}")
+                except ImportError:
+                    pass
+                finish_wandb_run()
+
+    def _train_loop(
+        self,
+        train_loader: DataLoader,
+        test_loader: DataLoader,
+    ) -> tuple[eqx.Module, TrainingHistory]:
+        """Core training loop with wandb logging and callback support."""
         opt_state = self.optimizer.init(eqx.filter(self.model, eqx.is_array))
 
         @eqx.filter_jit
@@ -213,25 +266,40 @@ class BroadbandTrainer:
             epoch_train_loss /= batch_count
             self.history.train_losses.append(epoch_train_loss)
 
+            # Log training metrics to wandb
+            if self.wandb_config is not None:
+                from .wandb_utils import log_epoch_metrics
+                if epoch % self.wandb_config.log_every == 0:
+                    log_epoch_metrics({"loss": epoch_train_loss}, epoch, prefix="train/")
+
             # Validation step
             if epoch % self.config.validate_every == 0:
                 test_loss = self._evaluate(test_loader)
                 self.history.test_losses.append(float(test_loss))
 
+                # Log validation metrics to wandb
+                if self.wandb_config is not None:
+                    from .wandb_utils import log_epoch_metrics
+                    if epoch % self.wandb_config.log_every == 0:
+                        log_epoch_metrics({"loss": float(test_loss)}, epoch, prefix="val/")
+
                 # Check if this is the best model
                 if test_loss < self.history.best_test_loss:
                     self.history.best_test_loss = float(test_loss)
                     self.history.best_epoch = epoch
-
                     if self.config.save_best:
                         self._save_checkpoint(epoch, test_loss, test_loader)
 
                 # Print progress
                 if epoch % self.config.print_every == 0:
                     print(
-                        f"Epoch {epoch:4d} | Train loss: {epoch_train_loss:.6f} | "
-                        f"Test loss: {test_loss:.6f} | Best: {self.history.best_test_loss:.6f}"
+                        f"Epoch {epoch:4d} | Train: {epoch_train_loss:.6f} | "
+                        f"Test: {test_loss:.6f} | Best: {self.history.best_test_loss:.6f}"
                     )
+
+            # Epoch callback (wandb-agnostic — callers handle logging)
+            if self.on_epoch_end is not None:
+                self.on_epoch_end(self.model, self.history, epoch)
 
         return self.model, self.history
 
