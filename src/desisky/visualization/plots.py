@@ -80,6 +80,101 @@ def plot_loss_curve(
     return fig
 
 
+def plot_broadband_band_panel(
+    model: eqx.Module,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    band_idx: int,
+    band_name: str,
+) -> Figure:
+    """
+    2x2 diagnostic panel for one broadband band.
+
+    Top-left: Train scatter (Obs vs Pred) with 1:1 line + +/-sigma_test rails.
+    Bottom-left: Test scatter (same format).
+    Top-right: Train residual histogram with 0 + +/-sigma_test lines.
+    Bottom-right: Test residual histogram (same format).
+
+    sigma_test = std of test residuals (the "honest" estimate of prediction
+    uncertainty on unseen data; training sigma would be optimistically biased).
+
+    Parameters
+    ----------
+    model : eqx.Module
+        Trained broadband MLP.
+    X_train, y_train : np.ndarray
+        Training inputs and targets.
+    X_test, y_test : np.ndarray
+        Test inputs and targets.
+    band_idx : int
+        Index of the band (0=V, 1=g, 2=r, 3=z).
+    band_name : str
+        Name of the band for titles.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    pred_train = np.array(jax.vmap(model)(jnp.asarray(X_train)))
+    pred_test = np.array(jax.vmap(model)(jnp.asarray(X_test)))
+    y_train = np.asarray(y_train)
+    y_test = np.asarray(y_test)
+
+    resid_train = pred_train[:, band_idx] - y_train[:, band_idx]
+    resid_test = pred_test[:, band_idx] - y_test[:, band_idx]
+    rmse_train = np.sqrt(np.mean(resid_train**2))
+    rmse_test = np.sqrt(np.mean(resid_test**2))
+    sigma_test = np.std(resid_test)
+
+    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+    x_min, x_max = 15.9, 22.0
+
+    # Left column: Scatter plots (Obs vs Pred)
+    for row, (y_obs, y_pred, rmse, label) in enumerate([
+        (y_train[:, band_idx], pred_train[:, band_idx], rmse_train, "Train"),
+        (y_test[:, band_idx], pred_test[:, band_idx], rmse_test, "Test"),
+    ]):
+        ax = axs[row, 0]
+        ax.scatter(y_obs, y_pred, alpha=0.25, s=10)
+        ax.plot([x_min, x_max], [x_min, x_max], ls="--", c="black", label="1:1")
+        ax.plot([x_min, x_max], [x_min + sigma_test, x_max + sigma_test],
+                ls="--", c="red", label=f"±σ_test={sigma_test:.3f}")
+        ax.plot([x_min, x_max], [x_min - sigma_test, x_max - sigma_test],
+                ls="--", c="red")
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(x_min - 0.5, x_max + 0.5)
+        ax.set_title(f"{band_name} — {label} (RMSE={rmse:.3f})")
+        ax.set_xlabel("Observed Magnitude")
+        ax.set_ylabel("Predicted Magnitude")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    # Right column: Residual histograms
+    xlim = max(3 * sigma_test, 0.5)
+    for row, (resid, label) in enumerate([
+        (resid_train, "Train"),
+        (resid_test, "Test"),
+    ]):
+        ax = axs[row, 1]
+        ax.hist(resid, bins=30, alpha=0.75, color="gray")
+        ax.axvline(0.0, color="black", ls="--", label="0 (perfect)")
+        ax.axvline(+sigma_test, color="red", ls="--",
+                   label=f"±σ_test={sigma_test:.3f}")
+        ax.axvline(-sigma_test, color="red", ls="--")
+        ax.set_xlim(-xlim, xlim)
+        ax.set_title(f"{band_name} — {label} Residuals")
+        ax.set_xlabel("Residual (Pred − Obs)")
+        ax.set_ylabel("Count")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle(f"Broadband {band_name}-band Diagnostics", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    return fig
+
+
 def plot_nn_outlier_analysis(
     model: eqx.Module,
     X_train: np.ndarray,
