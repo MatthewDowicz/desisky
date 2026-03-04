@@ -19,7 +19,8 @@
    - **LDM Twilight** — Twilight spectra conditioned on 4 features: observation altitude, transparency, sun altitude, and sun separation
 4. **Data utilities** — Download and load the DESI DR1 Sky Spectra Value-Added Catalog (VAC) with automatic SHA-256 integrity verification, subset filtering, and enrichment (V-band magnitudes, eclipse fractions, solar flux, coordinate transforms)
 5. **Spectral analysis** — Measure airglow emission line intensities and compute broadband magnitudes directly from spectra
-6. **Experiment tracking** — Optional Weights & Biases integration with visualization callbacks and hyperparameter sweeps
+6. **CLI tools** — Train and run inference on all models from the command line with optional W&B experiment tracking
+7. **Experiment tracking** — Optional Weights & Biases integration with visualization callbacks and hyperparameter sweeps
 
 Built with **JAX/Equinox** for high-performance model inference and designed to integrate with SpecSim and survey forecasting workflows. This repository hosts the code and notebooks supporting the forthcoming paper by Dowicz et al. (20XX).
 
@@ -35,7 +36,10 @@ Built with **JAX/Equinox** for high-performance model inference and designed to 
 - [Models](#models)
   - [Available Pre-trained Models](#available-pre-trained-models)
   - [Loading and Saving Models](#loading-and-saving-models)
-- [Training](#training)
+- [CLI Tools](#cli-tools)
+  - [CLI Training](#cli-training)
+  - [CLI Inference](#cli-inference)
+- [Training (Python API)](#training-python-api)
   - [VAE Training](#vae-training)
   - [LDM Training](#ldm-training)
 - [Experiment Tracking (W&B)](#experiment-tracking-wb)
@@ -329,7 +333,55 @@ import os
 os.environ["DESISKY_CACHE_DIR"] = "/path/to/cache"  # Python / notebook
 ```
 
-## Training
+## CLI Tools
+
+All CLI commands are registered as console entry points and available after installation.
+
+- **Inference** commands work with the base install (`pip install desisky`)
+- **Training** commands require training dependencies: `pip install desisky[all]` (CPU) or `pip install desisky[cuda12]` (GPU)
+- **Training with W&B visualization** requires the wandb extra: `pip install desisky[all,wandb]` or `pip install desisky[cuda12,wandb]`
+
+For the full reference including data formats and wandb integration, see [`docs/CLI_GUIDE.md`](docs/CLI_GUIDE.md).
+
+### CLI Training
+
+```bash
+# Broadband MLP (moon-contaminated data)
+desisky-train-broadband --epochs 500
+desisky-train-broadband --epochs 500 --wandb
+
+# VAE (full dataset)
+desisky-train-vae --epochs 100
+desisky-train-vae --epochs 100 --wandb
+
+# LDM (per-variant: dark, moon, twilight)
+desisky-train-ldm --variant dark --epochs 200
+desisky-train-ldm --variant moon --epochs 300 --wandb --vae-path my_vae.eqx
+```
+
+All training scripts support:
+- `--wandb` for optional W&B experiment tracking with automatic visualization callbacks
+- `--data-path` for user-provided data (`.fits`, `.csv`, `.npz` depending on model)
+- `--no-save` to skip checkpointing (useful for testing or sweeps)
+- `--vae-path` / `--model-path` for custom pretrained weights
+
+### CLI Inference
+
+```bash
+# Broadband predictions (CSV or npz output)
+desisky-infer-broadband --output predictions.csv
+desisky-infer-broadband --output predictions.npz --output-format npz
+
+# VAE encode + reconstruct
+desisky-infer-vae --subset dark --output dark_latents.npz
+
+# LDM spectral generation
+desisky-infer-ldm --variant dark --n-samples 500
+desisky-infer-ldm --variant moon --n-samples 100 --guidance-scale 2.0
+desisky-infer-ldm --conditioning '[[60,0.9,-30,150,45,10,120,5]]'
+```
+
+## Training (Python API)
 
 ### VAE training
 
@@ -499,13 +551,20 @@ desisky/
 │   │   ├── vae_losses.py       #   InfoVAE-MMD loss with RBF kernel
 │   │   └── wandb_utils.py      #   W&B logging utilities
 │   ├── visualization/          # Plotting
-│   │   ├── plots.py            #   Loss curves, outlier analysis
+│   │   ├── plots.py            #   Loss curves, outlier analysis, broadband band panels
 │   │   └── wandb_plots.py      #   Reconstructions, corner plots, CDFs, validation grids
 │   └── scripts/                # CLI tools
-│       └── download_data.py    #   desisky-data command
-├── tests/                      # 277 unit tests
+│       ├── download_data.py    #   desisky-data command
+│       ├── train_broadband.py  #   desisky-train-broadband
+│       ├── train_vae.py        #   desisky-train-vae
+│       ├── train_ldm.py        #   desisky-train-ldm
+│       ├── infer_broadband.py  #   desisky-infer-broadband
+│       ├── infer_vae.py        #   desisky-infer-vae
+│       └── infer_ldm.py        #   desisky-infer-ldm
+├── tests/                      # 361 unit tests
 ├── examples/                   # 9 Jupyter notebooks
-├── docs/                       # Additional documentation
+├── docs/
+│   └── CLI_GUIDE.md            # CLI data formats, output formats, wandb reference
 ├── pyproject.toml
 ├── CHANGELOG.md
 └── LICENSE.txt

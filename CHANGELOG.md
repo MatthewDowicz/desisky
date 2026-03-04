@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-04
+
+### Added
+
+- **CLI training scripts** for all three model types, each with optional W&B integration:
+  - `desisky-train-broadband` — Train broadband MLP on moon-contaminated data with per-band scatter+residual visualization callbacks
+  - `desisky-train-vae` — Train VAE (InfoVAE-MMD) with reconstruction, latent corner, broadband CDF, and airglow CDF visualization callbacks
+  - `desisky-train-ldm` — Train LDM (EDM framework) for dark/moon/twilight variants with broadband CDF, airglow CDF, latent corner comparison, and conditional validation grid callbacks
+- **CLI inference scripts** for all three model types:
+  - `desisky-infer-broadband` — Run broadband MLP inference, output CSV or npz
+  - `desisky-infer-vae` — VAE encode+reconstruct with subset selection (full/dark/moon/twilight)
+  - `desisky-infer-ldm` — Generate spectra with LDM; conditioning from real data, user file, or inline JSON
+- **Multi-format data loading** for LDM training (`--data-path`):
+  - `.npz` — Pre-processed data (flux, conditioning, wavelength keys)
+  - `.fits` — SkySpecVAC format with automatic variant-specific quality filtering
+  - `.csv` + `--flux-path` — Metadata CSV with separate `.npy` flux array
+- **`plot_broadband_band_panel()`** — New 2x2 scatter+residual diagnostic panel for broadband training visualization
+- `BroadbandTrainer` now supports `wandb_config` and `on_epoch_end` callback parameters (backward-compatible, both default to `None`)
+- 6 new console entry points registered in `pyproject.toml`
+- `docs/CLI_GUIDE.md` — Documents all CLI commands, data formats, output formats, and wandb integration
+- Integration tests for all 6 CLI scripts (3 training + 3 inference)
+
+### Changed
+
+- `train_vae.py` — Full rewrite to use `VAETrainer` with wandb callbacks; uses raw tensors instead of `TensorDataset` for correct `VAETrainer` iteration
+- `BroadbandTrainer` restructured with `train()` / `_train_loop()` pattern matching `VAETrainer` / `LatentDiffusionTrainer`
+
+### Fixed
+
+- LDM training encoding now uses VAE full forward pass (`vae(batch, key)["latent"]`) with reparameterization, matching the notebook pattern, instead of `vae.encode()` which returns a raw tuple
+- SkySpecVAC method name mapping: `load_dark` → `load_dark_time`, `load_moon` → `load_moon_contaminated`, `load_twilight` → `load_sun_contaminated`
+- LDM training and inference now apply manual metadata enrichment (`attach_solar_flux`, `add_galactic_coordinates`, `add_ecliptic_coordinates`) since `enrich=True` only adds `SKY_MAG_V_SPEC` and `ECLIPSE_FRAC`
+- NaN/Inf rows in conditioning columns are now detected and removed during data loading
+- `plot_conditional_validation_grid()` no longer crashes with small validation sets (e.g., 29 twilight samples): adaptive bin count and proper empty-bin handling
+- `plot_cdf_comparison()` histograms now use shared bin edges between real and generated data for accurate visual comparison
+- `plot_broadband_band_panel()` histogram bins reduced from 80 to 30; combined +/- sigma into single legend entry; relabeled zero-line as "0 (perfect)"
+- Suppressed harmless speclite `log10` warnings from negative flux values in early-training generated spectra
+
 ## [0.5.0] - 2026-02-18
 
 ### Added
@@ -135,7 +173,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for CPU and CUDA (GPU) installations
 - MIT License
 
-[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.5.0...HEAD
+[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/MatthewDowicz/desisky/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MatthewDowicz/desisky/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MatthewDowicz/desisky/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MatthewDowicz/desisky/compare/v0.1.0...v0.3.0
