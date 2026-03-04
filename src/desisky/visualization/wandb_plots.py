@@ -438,12 +438,15 @@ def plot_cdf_comparison(
 
         # --- Left panel: histogram ---
         ax_hist = fig.add_subplot(gs[:, 0])
+        # Shared bin edges so real & generated are comparable
+        combined = np.concatenate([real_clean, gen_clean])
+        shared_edges = np.linspace(combined.min(), combined.max(), n_bins + 1)
         ax_hist.hist(
-            real_clean, bins=n_bins, density=True, alpha=0.5,
+            real_clean, bins=shared_edges, density=True, alpha=0.5,
             color="black", label="Real", histtype="stepfilled",
         )
         ax_hist.hist(
-            gen_clean, bins=n_bins, density=True, alpha=0.6,
+            gen_clean, bins=shared_edges, density=True, alpha=0.6,
             color="tab:green", label="Generated",
         )
         ax_hist.set_xlabel(name, fontsize=10)
@@ -541,6 +544,10 @@ def plot_conditional_validation_grid(
     cond_values = np.asarray(cond_values, dtype=float)
     n_features = len(feature_names)
 
+    # Adaptive bin count: need at least ~3 samples per bin for stable stats
+    min_per_bin = 3
+    n_bins = max(2, min(n_bins, len(cond_values) // min_per_bin))
+
     # Quantile-based bins on conditioning variable
     bin_edges = np.quantile(
         cond_values[np.isfinite(cond_values)],
@@ -554,13 +561,20 @@ def plot_conditional_validation_grid(
         centers, means, q16s, q84s = [], [], [], []
         for b in range(n_bins):
             mask = bin_idx == b
-            if mask.sum() < 5:
+            if mask.sum() < min_per_bin:
                 continue
             centers.append(cond_values[mask].mean())
             vals = features[mask]
             means.append(np.nanmean(vals, axis=0))
             q16s.append(np.nanpercentile(vals, 16, axis=0))
             q84s.append(np.nanpercentile(vals, 84, axis=0))
+        if len(centers) == 0:
+            return (
+                np.empty(0),
+                np.empty((0, features.shape[1])),
+                np.empty((0, features.shape[1])),
+                np.empty((0, features.shape[1])),
+            )
         return (
             np.array(centers),
             np.array(means),
@@ -593,25 +607,27 @@ def plot_conditional_validation_grid(
         ax = axes_flat[idx]
 
         # Real
-        ax.plot(
-            real_centers, real_means[:, idx],
-            "ko-", linewidth=2, markersize=5, label="Real", alpha=0.8,
-        )
-        ax.fill_between(
-            real_centers, real_q16[:, idx], real_q84[:, idx],
-            color="black", alpha=0.12, label="Real 16-84%",
-        )
+        if len(real_centers) > 0:
+            ax.plot(
+                real_centers, real_means[:, idx],
+                "ko-", linewidth=2, markersize=5, label="Real", alpha=0.8,
+            )
+            ax.fill_between(
+                real_centers, real_q16[:, idx], real_q84[:, idx],
+                color="black", alpha=0.12, label="Real 16-84%",
+            )
 
         # Generated
-        ax.plot(
-            gen_centers, gen_means[:, idx],
-            "s--", color="tab:green", linewidth=2, markersize=4,
-            label="Generated", alpha=0.8,
-        )
-        ax.fill_between(
-            gen_centers, gen_q16[:, idx], gen_q84[:, idx],
-            color="tab:green", alpha=0.12, label="Gen 16-84%",
-        )
+        if len(gen_centers) > 0:
+            ax.plot(
+                gen_centers, gen_means[:, idx],
+                "s--", color="tab:green", linewidth=2, markersize=4,
+                label="Generated", alpha=0.8,
+            )
+            ax.fill_between(
+                gen_centers, gen_q16[:, idx], gen_q84[:, idx],
+                color="tab:green", alpha=0.12, label="Gen 16-84%",
+            )
 
         ax.set_xlabel(cond_name, fontsize=9)
         ax.set_ylabel(name, fontsize=9)
