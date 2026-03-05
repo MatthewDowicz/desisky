@@ -357,7 +357,7 @@ class BroadbandTrainer:
             save_dir = Path(self.config.save_dir)
 
         save_dir.mkdir(parents=True, exist_ok=True)
-        save_path = save_dir / f"{self.config.run_name}.eqx"
+        save_path = save_dir / f"{self._resolve_run_name()}.eqx"
 
         # Compute per-band RMSE on test set
         all_inputs, all_targets, _, _ = gather_full_data(test_loader)
