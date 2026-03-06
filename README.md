@@ -99,8 +99,7 @@ print(f"Flux: {flux.shape}")              # (9176, 7781)
 print(f"Metadata columns: {list(metadata.columns)}")
 # ['NIGHT', 'EXPID', 'TILEID', 'AIRMASS', 'EBV', 'MOONFRAC', 'MOONALT', ...]
 
-# Load with enrichment (adds V-band magnitudes and eclipse fraction)
-wavelength, flux, metadata = vac.load(enrich=True)
+# Enriched columns are added automatically for v1.0
 print('SKY_MAG_V_SPEC' in metadata.columns)  # True
 print('ECLIPSE_FRAC' in metadata.columns)    # True
 ```
@@ -113,8 +112,8 @@ import jax.numpy as jnp
 
 model, meta = desisky.io.load_model("broadband")
 
-# Input: [MOONSEP, MOONFRAC, MOONALT, OBSALT, TRANSPARENCY_GFA, ECLIPSE_FRAC]
-x = jnp.array([45.0, 0.8, 30.0, 80.0, 0.95, 0.0])
+# Input: [MOONSEP, OBSALT, MOONALT, MOONFRAC, TRANSPARENCY_GFA, ECLIPSE_FRAC]
+x = jnp.array([45.0, 80.0, 30.0, 0.8, 0.95, 0.0])
 
 # Predict surface brightness in V, g, r, z bands
 y = model(x)  # Shape: (4,)
@@ -207,18 +206,19 @@ wave, flux, meta = vac.load_moon_contaminated()
 # SUNALT < -20  |  MOONALT > 5  |  MOONFRAC > 0.5  |  MOONSEP <= 90  |  TRANSPARENCY_GFA > 0
 ```
 
-All subset methods include enrichment by default (`enrich=True`), adding computed columns for V-band magnitude and lunar eclipse fraction.
+All data is automatically enriched with computed columns on load (v1.0 only):
 
-### Data enrichment
-
-When loading with `enrich=True`, the following columns are added:
+### Enriched columns
 
 | Column | Description |
 |--------|-------------|
 | `SKY_MAG_V_SPEC` | V-band AB magnitude computed from the spectrum via speclite |
 | `ECLIPSE_FRAC` | Lunar eclipse umbral coverage fraction (0-1) |
+| `SOLFLUX` | Daily 10.7 cm solar flux (sfu) |
+| `GALLON`, `GALLAT` | Galactic coordinates (from TILERA/TILEDEC) |
+| `ECLLON`, `ECLLAT` | Ecliptic coordinates (from TILERA/TILEDEC) |
 
-Additional enrichment functions are available for further analysis (require `desisky[data]`):
+The individual enrichment functions are also available for standalone use:
 
 ```python
 from desisky.data import (
@@ -513,7 +513,7 @@ from desisky.visualization import (
 
 | Notebook | Description |
 |----------|-------------|
-| [00_quickstart.ipynb](examples/00_quickstart.ipynb) | Loading models, data subsets, and running inference |
+| [00_tutorial.ipynb](examples/00_tutorial.ipynb) | **Start here** -- End-to-end walkthrough of every major capability |
 | [01_broadband_training.ipynb](examples/01_broadband_training.ipynb) | Train broadband model on moon-contaminated subset |
 | [02_vae_inference.ipynb](examples/02_vae_inference.ipynb) | VAE encoding/decoding and latent space visualization |
 | [03_vae_analysis.ipynb](examples/03_vae_analysis.ipynb) | Latent space interpolation and anomaly detection |
