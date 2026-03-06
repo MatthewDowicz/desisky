@@ -320,17 +320,7 @@ def main():
             "twilight": "load_sun_contaminated",
         }
         loader = getattr(vac, loader_names[variant])
-        wavelength, flux, metadata = loader(enrich=True)
-
-        # Attach derived columns (solar flux, galactic/ecliptic coords).
-        # Applied unconditionally so any variant can use any column.
-        from desisky.data import (
-            attach_solar_flux, add_galactic_coordinates,
-            add_ecliptic_coordinates,
-        )
-        metadata = attach_solar_flux(metadata, time_tolerance="12h")
-        metadata = add_galactic_coordinates(metadata)
-        metadata = add_ecliptic_coordinates(metadata)
+        wavelength, flux, metadata = loader()
 
         conditioning = metadata[cond_cols].to_numpy().astype(np.float32)
 

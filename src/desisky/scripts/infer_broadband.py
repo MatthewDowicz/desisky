@@ -28,8 +28,8 @@ import pandas as pd
 from desisky.io import load_or_builtin
 
 INPUT_FEATURES = [
-    "MOONSEP", "MOONFRAC", "MOONALT",
-    "OBSALT", "TRANSPARENCY_GFA", "ECLIPSE_FRAC",
+    "MOONSEP", "OBSALT", "MOONALT",
+    "MOONFRAC", "TRANSPARENCY_GFA", "ECLIPSE_FRAC",
 ]
 BAND_NAMES = ["V", "g", "r", "z"]
 
@@ -85,7 +85,7 @@ def main():
     else:
         from desisky.data import SkySpecVAC
         vac = SkySpecVAC(version="v1.0", download=True)
-        _, _, metadata = vac.load_moon_contaminated(enrich=True)
+        _, _, metadata = vac.load_moon_contaminated()
 
     if args.n_samples is not None:
         metadata = metadata.iloc[:args.n_samples]

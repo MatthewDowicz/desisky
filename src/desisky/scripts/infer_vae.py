@@ -76,13 +76,13 @@ def main():
         print(f"  Loaded user data: {flux.shape[0]:,} spectra")
     else:
         if args.subset == "full":
-            wavelength, flux, metadata = vac.load(enrich=True)
+            wavelength, flux, metadata = vac.load()
         elif args.subset == "dark":
-            wavelength, flux, metadata = vac.load_dark_time(enrich=True)
+            wavelength, flux, metadata = vac.load_dark_time()
         elif args.subset == "moon":
-            wavelength, flux, metadata = vac.load_moon_contaminated(enrich=True)
+            wavelength, flux, metadata = vac.load_moon_contaminated()
         elif args.subset == "twilight":
-            wavelength, flux, metadata = vac.load_sun_contaminated(enrich=True)
+            wavelength, flux, metadata = vac.load_sun_contaminated()
         print(f"  Loaded {len(flux):,} {args.subset} spectra")
 
     if args.n_samples is not None:

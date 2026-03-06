@@ -187,7 +187,7 @@ def main():
         wavelength, _, _ = vac.load()
         print(f"  Loaded user data: {flux.shape[0]:,} spectra from {args.data_path}")
     else:
-        wavelength, flux, metadata = vac.load(enrich=True)
+        wavelength, flux, metadata = vac.load()
         print(f"  Loaded {len(metadata):,} spectra from DESI SkySpecVAC")
 
     # Classify sky conditions (for latent corner coloring during wandb)
