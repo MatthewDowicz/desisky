@@ -350,13 +350,13 @@ def sample_edm_stochastic(
             # Temporarily increase noise level
             sigma_hat = sigma_cur + gamma_i * sigma_cur
             eps = jax.random.normal(noise_key, x_i.shape) * S_noise
-            x_hat = x_i + jnp.sqrt(sigma_hat**2 - sigma_cur**2) * eps
+            x_hat = x_i + jnp.sqrt(jnp.maximum(sigma_hat**2 - sigma_cur**2, 0.0)) * eps
 
             # Evaluate dx/dt at sigma_hat
             D_hat = guided_vmap(
                 model, x_hat, sigma_hat, cond_vec, sigma_data, guidance_scale
             )
-            d_cur = (x_hat - D_hat) / sigma_hat
+            d_cur = (x_hat - D_hat) / jnp.maximum(sigma_hat, 1e-12)
 
             # Euler step from sigma_hat to sigma_next
             x_euler = x_hat + (sigma_next - sigma_hat) * d_cur
@@ -367,7 +367,7 @@ def sample_edm_stochastic(
                     model, x_euler, sigma_next, cond_vec,
                     sigma_data, guidance_scale
                 )
-                d_next = (x_euler - D_next) / sigma_next
+                d_next = (x_euler - D_next) / jnp.maximum(sigma_next, 1e-12)
                 d_avg = 0.5 * (d_cur + d_next)
                 return x_hat + (sigma_next - sigma_hat) * d_avg
 

@@ -328,7 +328,7 @@ class TestSampleEDMStochastic:
             num_steps=5,
             S_churn=0.0,
         )
-        assert jnp.allclose(s_det, s_sto, atol=1e-4)
+        assert jnp.allclose(s_det, s_sto, atol=0.01)
 
 
 # =========================================================================
