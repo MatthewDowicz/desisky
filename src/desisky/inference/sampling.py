@@ -2,10 +2,16 @@
 Sampling algorithms for Latent Diffusion Models using EDM (Karras et al. 2022).
 
 This module provides production-ready sampling functions for generating sky spectra
-using trained latent diffusion models. Sampling uses:
+using trained latent diffusion models. Two sampling modes are available:
+
+- **Deterministic (default)**: Heun ODE solver — same seed + same conditioning
+  always produces identical output.
+- **Stochastic**: Langevin-corrected reverse SDE (Algorithm 2 from Karras et al.
+  2022) — injects noise at each step for diverse ensemble generation.
+
+Both use:
 
 - **Karras sigma schedule**: Geometrically spaced noise levels
-- **Probability flow ODE**: dx/d_sigma = (x - D(x; sigma)) / sigma
 - **Heun solver**: Second-order method for better accuracy
 
 Examples
@@ -243,6 +249,146 @@ def sample_edm(
 
 
 # =========================================================================
+# EDM Stochastic Sampling (Algorithm 2, Karras et al. 2022)
+# =========================================================================
+
+@eqx.filter_jit
+def sample_edm_stochastic(
+    key: jax.random.PRNGKey,
+    model: eqx.Module,
+    cond_vec: jnp.ndarray,
+    n_sample: int,
+    size: Tuple[int, int],
+    sigma_data: float,
+    guidance_scale: float = 1.0,
+    num_steps: int = 100,
+    sigma_min: float = EDM_SIGMA_MIN,
+    sigma_max: float = EDM_SIGMA_MAX,
+    rho: float = 7.0,
+    S_churn: float = 40.0,
+    S_tmin: float = 0.05,
+    S_tmax: float = 50.0,
+    S_noise: float = 1.003,
+) -> jnp.ndarray:
+    """
+    EDM stochastic sampling with Langevin-like noise injection (Algorithm 2).
+
+    Combines the 2nd-order Heun ODE integrator with explicit Langevin-like
+    "churn" — adding and removing noise at each step. This produces different
+    outputs even with the same seed, useful for generating diverse ensembles.
+
+    At each step i:
+      1. Increase noise level from t_i to t_hat_i by injecting fresh noise
+      2. Denoise from t_hat_i to t_{i+1} using Heun's method
+
+    Parameters
+    ----------
+    key : jax.random.PRNGKey
+        Random key for initial noise and stochastic injection.
+    model : eqx.Module
+        Raw UNet network F_theta.
+    cond_vec : jnp.ndarray
+        Conditioning vectors, shape (n_sample, meta_dim).
+    n_sample : int
+        Number of samples.
+    size : tuple of int
+        Sample size (channels, latent_dim).
+    sigma_data : float
+        Standard deviation of training data.
+    guidance_scale : float
+        CFG guidance weight.
+    num_steps : int
+        Number of solver steps.
+    sigma_min : float
+        Minimum sigma.
+    sigma_max : float
+        Maximum sigma.
+    rho : float
+        Sigma schedule spacing parameter.
+    S_churn : float
+        Overall amount of stochasticity. Higher values inject more noise.
+    S_tmin : float
+        Minimum sigma for enabling stochasticity.
+    S_tmax : float
+        Maximum sigma for enabling stochasticity.
+    S_noise : float
+        Noise inflation factor (slightly > 1 counteracts detail loss).
+
+    Returns
+    -------
+    jnp.ndarray
+        Generated latent samples, shape (n_sample, channels, latent_dim).
+    """
+    sigmas = get_sigmas_karras(num_steps, sigma_min, sigma_max, rho)
+
+    key, init_key = jax.random.split(key)
+    x_i = jax.random.normal(init_key, (n_sample, *size)) * sigmas[0]
+
+    sigma_pairs = jnp.stack([sigmas[:-1], sigmas[1:]], axis=1)
+
+    guided_vmap = jax.vmap(
+        guided_denoiser,
+        in_axes=(None, 0, None, 0, None, None),
+    )
+
+    # Upper bound on per-step noise injection (clamped by sqrt(2)-1)
+    gamma_max = jnp.minimum(S_churn / num_steps, jnp.sqrt(2.0) - 1.0)
+
+    def _stochastic_step(carry, sigma_pair):
+        x_i, step_key = carry
+        sigma_cur, sigma_next = sigma_pair[0], sigma_pair[1]
+
+        step_key, noise_key = jax.random.split(step_key)
+
+        def do_step(args):
+            x_i, noise_key = args
+
+            # Only inject noise when sigma_cur is in [S_tmin, S_tmax]
+            in_range = (sigma_cur >= S_tmin) & (sigma_cur <= S_tmax)
+            gamma_i = jnp.where(in_range, gamma_max, 0.0)
+
+            # Temporarily increase noise level
+            sigma_hat = sigma_cur + gamma_i * sigma_cur
+            eps = jax.random.normal(noise_key, x_i.shape) * S_noise
+            x_hat = x_i + jnp.sqrt(jnp.maximum(sigma_hat**2 - sigma_cur**2, 0.0)) * eps
+
+            # Evaluate dx/dt at sigma_hat
+            D_hat = guided_vmap(
+                model, x_hat, sigma_hat, cond_vec, sigma_data, guidance_scale
+            )
+            d_cur = (x_hat - D_hat) / jnp.maximum(sigma_hat, 1e-12)
+
+            # Euler step from sigma_hat to sigma_next
+            x_euler = x_hat + (sigma_next - sigma_hat) * d_cur
+
+            # Heun corrector (if sigma_next > 0)
+            def heun_correct(x_euler):
+                D_next = guided_vmap(
+                    model, x_euler, sigma_next, cond_vec,
+                    sigma_data, guidance_scale
+                )
+                d_next = (x_euler - D_next) / jnp.maximum(sigma_next, 1e-12)
+                d_avg = 0.5 * (d_cur + d_next)
+                return x_hat + (sigma_next - sigma_hat) * d_avg
+
+            return jax.lax.cond(
+                sigma_next > 0, heun_correct, lambda x: x_euler, x_euler
+            )
+
+        x_next = jax.lax.cond(
+            sigma_cur > 1e-8,
+            do_step,
+            lambda args: args[0],
+            (x_i, noise_key),
+        )
+
+        return (x_next, step_key), None
+
+    (x_0, _), _ = jax.lax.scan(_stochastic_step, (x_i, key), sigma_pairs)
+    return x_0
+
+
+# =========================================================================
 # High-Level Sampler Class
 # =========================================================================
 
@@ -373,6 +519,11 @@ class LatentDiffusionSampler:
         conditioning: jnp.ndarray,
         n_samples: Optional[int] = None,
         guidance_scale: float = 2.0,
+        stochastic: bool = False,
+        S_churn: float = 40.0,
+        S_tmin: float = 0.05,
+        S_tmax: float = 50.0,
+        S_noise: float = 1.003,
     ) -> jnp.ndarray:
         """
         Sample latent representations from the diffusion model.
@@ -387,6 +538,20 @@ class LatentDiffusionSampler:
             Number of samples. If None, inferred from conditioning shape.
         guidance_scale : float
             Classifier-free guidance strength (typical: 1-4).
+        stochastic : bool
+            If True, use the Langevin-corrected stochastic sampler
+            (Algorithm 2, Karras et al. 2022) instead of the deterministic
+            Heun ODE solver. Produces different outputs even with the same
+            seed, useful for generating diverse ensembles.
+        S_churn : float
+            Stochastic sampler only. Overall noise injection amount.
+        S_tmin : float
+            Stochastic sampler only. Minimum sigma for noise injection.
+        S_tmax : float
+            Stochastic sampler only. Maximum sigma for noise injection.
+        S_noise : float
+            Stochastic sampler only. Noise inflation factor (slightly > 1
+            counteracts detail loss from non-conservative denoisers).
 
         Returns
         -------
@@ -410,19 +575,38 @@ class LatentDiffusionSampler:
 
         latent_size = (self.config.latent_channels, self.config.latent_dim)
 
-        latents = sample_edm(
-            key,
-            self.ldm,
-            conditioning,
-            n_samples,
-            latent_size,
-            self.sigma_data,
-            guidance_scale,
-            self.config.num_steps,
-            self.config.sigma_min,
-            self.config.sigma_max,
-            self.config.rho,
-        )
+        if stochastic:
+            latents = sample_edm_stochastic(
+                key,
+                self.ldm,
+                conditioning,
+                n_samples,
+                latent_size,
+                self.sigma_data,
+                guidance_scale,
+                self.config.num_steps,
+                self.config.sigma_min,
+                self.config.sigma_max,
+                self.config.rho,
+                S_churn,
+                S_tmin,
+                S_tmax,
+                S_noise,
+            )
+        else:
+            latents = sample_edm(
+                key,
+                self.ldm,
+                conditioning,
+                n_samples,
+                latent_size,
+                self.sigma_data,
+                guidance_scale,
+                self.config.num_steps,
+                self.config.sigma_min,
+                self.config.sigma_max,
+                self.config.rho,
+            )
 
         return latents
 
@@ -433,11 +617,16 @@ class LatentDiffusionSampler:
         n_samples: Optional[int] = None,
         guidance_scale: float = 2.0,
         return_latents: bool = False,
+        stochastic: bool = False,
+        S_churn: float = 40.0,
+        S_tmin: float = 0.05,
+        S_tmax: float = 50.0,
+        S_noise: float = 1.003,
     ) -> jnp.ndarray | Tuple[jnp.ndarray, jnp.ndarray]:
         """
         Sample sky spectra from the latent diffusion model.
 
-        Generates latent samples via EDM Heun solver and decodes them
+        Generates latent samples via the EDM framework and decodes them
         to full-resolution spectra via the VAE.
 
         Parameters
@@ -452,6 +641,18 @@ class LatentDiffusionSampler:
             Guidance strength (higher = stronger conditioning).
         return_latents : bool
             If True, return (spectra, latents).
+        stochastic : bool
+            If True, use the Langevin-corrected stochastic sampler
+            (Algorithm 2, Karras et al. 2022) instead of the deterministic
+            Heun ODE solver.
+        S_churn : float
+            Stochastic sampler only. Overall noise injection amount.
+        S_tmin : float
+            Stochastic sampler only. Minimum sigma for noise injection.
+        S_tmax : float
+            Stochastic sampler only. Maximum sigma for noise injection.
+        S_noise : float
+            Stochastic sampler only. Noise inflation factor.
 
         Returns
         -------
@@ -460,7 +661,10 @@ class LatentDiffusionSampler:
         latents : jnp.ndarray, optional
             Generated latents (if return_latents=True).
         """
-        latents = self.sample_latents(key, conditioning, n_samples, guidance_scale)
+        latents = self.sample_latents(
+            key, conditioning, n_samples, guidance_scale,
+            stochastic, S_churn, S_tmin, S_tmax, S_noise,
+        )
 
         # VAE decoder expects shape (latent_dim,), so squeeze channel dimension
         latents_squeezed = latents.squeeze(1)

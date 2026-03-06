@@ -217,6 +217,121 @@ class TestSampleEDM:
 
 
 # =========================================================================
+# EDM Stochastic Sampling (Algorithm 2, Karras et al. 2022)
+# =========================================================================
+
+class TestSampleEDMStochastic:
+    """Tests for the EDM stochastic sampler (Algorithm 2)."""
+
+    @pytest.fixture
+    def model_and_sigma_data(self):
+        from desisky.models.ldm import make_UNet1D_cond
+
+        model = make_UNet1D_cond(
+            in_ch=1, out_ch=1, meta_dim=8,
+            hidden=16, levels=2, emb_dim=16,
+            key=jr.PRNGKey(0)
+        )
+        sigma_data = 6.7
+        return model, sigma_data
+
+    def test_sample_shape(self, model_and_sigma_data):
+        """Output shape is (n_sample, channels, latent_dim)."""
+        from desisky.inference import sample_edm_stochastic
+
+        model, sigma_data = model_and_sigma_data
+        cond = jnp.ones((3, 8))
+
+        latents = sample_edm_stochastic(
+            jr.PRNGKey(0), model, cond,
+            n_sample=3, size=(1, 8), sigma_data=sigma_data,
+            num_steps=5,
+        )
+        assert latents.shape == (3, 1, 8)
+
+    def test_sample_finite(self, model_and_sigma_data):
+        """Samples should be finite (no NaN or inf)."""
+        from desisky.inference import sample_edm_stochastic
+
+        model, sigma_data = model_and_sigma_data
+        cond = jnp.ones((2, 8))
+
+        latents = sample_edm_stochastic(
+            jr.PRNGKey(0), model, cond,
+            n_sample=2, size=(1, 8), sigma_data=sigma_data,
+            num_steps=5,
+        )
+        assert jnp.all(jnp.isfinite(latents))
+
+    def test_same_key_same_output(self, model_and_sigma_data):
+        """Same key produces identical samples (deterministic given same PRNG key)."""
+        from desisky.inference import sample_edm_stochastic
+
+        model, sigma_data = model_and_sigma_data
+        cond = jnp.ones((1, 8))
+
+        s1 = sample_edm_stochastic(
+            jr.PRNGKey(42), model, cond,
+            n_sample=1, size=(1, 8), sigma_data=sigma_data,
+            num_steps=5,
+        )
+        s2 = sample_edm_stochastic(
+            jr.PRNGKey(42), model, cond,
+            n_sample=1, size=(1, 8), sigma_data=sigma_data,
+            num_steps=5,
+        )
+        assert jnp.allclose(s1, s2, atol=1e-5)
+
+    def test_differs_from_deterministic(self, model_and_sigma_data):
+        """Stochastic sampler produces different output than deterministic."""
+        from desisky.inference import sample_edm, sample_edm_stochastic
+
+        model, sigma_data = model_and_sigma_data
+        cond = jnp.ones((1, 8))
+
+        s_det = sample_edm(
+            jr.PRNGKey(0), model, cond,
+            n_sample=1, size=(1, 8), sigma_data=sigma_data,
+            num_steps=5,
+        )
+        s_sto = sample_edm_stochastic(
+            jr.PRNGKey(0), model, cond,
+            n_sample=1, size=(1, 8), sigma_data=sigma_data,
+            num_steps=5,
+        )
+        assert not jnp.allclose(s_det, s_sto, atol=1e-3)
+
+    def test_zero_churn_matches_deterministic(self, model_and_sigma_data):
+        """With S_churn=0, stochastic sampler reduces to deterministic Heun.
+
+        The stochastic sampler splits the key (key -> step_key, init_key) to
+        reserve a stream for per-step noise. To compare fairly, we pass the
+        same split init_key to the deterministic sampler so both start from
+        identical initial noise.
+        """
+        from desisky.inference import sample_edm, sample_edm_stochastic
+
+        model, sigma_data = model_and_sigma_data
+        cond = jnp.ones((1, 8))
+
+        # Reproduce the split that sample_edm_stochastic does internally
+        _, init_key = jax.random.split(jr.PRNGKey(0))
+
+        s_det = sample_edm(
+            init_key, model, cond,
+            n_sample=1, size=(1, 8), sigma_data=sigma_data,
+            num_steps=5,
+        )
+        s_sto = sample_edm_stochastic(
+            jr.PRNGKey(0), model, cond,
+            n_sample=1, size=(1, 8), sigma_data=sigma_data,
+            num_steps=5,
+            S_churn=0.0,
+        )
+        assert jnp.allclose(s_det, s_sto, atol=0.01)
+
+
+# =========================================================================
 # SamplerConfig
 # =========================================================================
 
@@ -460,6 +575,86 @@ class TestLatentDiffusionSampler:
             jr.PRNGKey(0), raw_cond, guidance_scale=1.0
         )
         assert not jnp.allclose(lat1, lat2, atol=1e-3)
+
+    def test_sample_latents_stochastic_shape(self, dummy_models):
+        """Stochastic sample_latents returns correct shape."""
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, sigma_data = dummy_models
+        sampler = LatentDiffusionSampler(ldm, vae, sigma_data, num_steps=5)
+
+        conditioning = jnp.ones((3, 8))
+        latents = sampler.sample_latents(
+            key=jr.PRNGKey(0),
+            conditioning=conditioning,
+            guidance_scale=1.0,
+            stochastic=True,
+        )
+        assert latents.shape == (3, 1, 8)
+
+    def test_sample_spectra_stochastic_shape(self, dummy_models):
+        """Stochastic sample() returns decoded spectra of correct shape."""
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, sigma_data = dummy_models
+        sampler = LatentDiffusionSampler(ldm, vae, sigma_data, num_steps=5)
+
+        conditioning = jnp.ones((2, 8))
+        spectra = sampler.sample(
+            key=jr.PRNGKey(0),
+            conditioning=conditioning,
+            guidance_scale=1.0,
+            stochastic=True,
+        )
+        assert spectra.shape == (2, 100)
+
+    def test_sample_stochastic_with_return_latents(self, dummy_models):
+        """Stochastic return_latents=True returns both spectra and latents."""
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, sigma_data = dummy_models
+        sampler = LatentDiffusionSampler(ldm, vae, sigma_data, num_steps=5)
+
+        conditioning = jnp.ones((2, 8))
+        spectra, latents = sampler.sample(
+            key=jr.PRNGKey(0),
+            conditioning=conditioning,
+            guidance_scale=1.0,
+            return_latents=True,
+            stochastic=True,
+        )
+        assert spectra.shape == (2, 100)
+        assert latents.shape == (2, 1, 8)
+
+    def test_stochastic_differs_from_deterministic(self, dummy_models):
+        """Stochastic and deterministic modes produce different spectra."""
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, sigma_data = dummy_models
+        sampler = LatentDiffusionSampler(ldm, vae, sigma_data, num_steps=5)
+        conditioning = jnp.ones((1, 8))
+
+        s_det = sampler.sample(jr.PRNGKey(0), conditioning, guidance_scale=1.0)
+        s_sto = sampler.sample(
+            jr.PRNGKey(0), conditioning, guidance_scale=1.0, stochastic=True,
+        )
+        assert not jnp.allclose(s_det, s_sto, atol=1e-3)
+
+    def test_stochastic_same_key_same_output(self, dummy_models):
+        """Same key produces identical stochastic spectra."""
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, sigma_data = dummy_models
+        sampler = LatentDiffusionSampler(ldm, vae, sigma_data, num_steps=5)
+        conditioning = jnp.ones((1, 8))
+
+        s1 = sampler.sample(
+            jr.PRNGKey(42), conditioning, guidance_scale=1.0, stochastic=True,
+        )
+        s2 = sampler.sample(
+            jr.PRNGKey(42), conditioning, guidance_scale=1.0, stochastic=True,
+        )
+        assert jnp.allclose(s1, s2, atol=1e-5)
 
     def test_repr_shows_auto_normalize(self, dummy_models):
         """__repr__ reflects whether auto_normalize is active."""

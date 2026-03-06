@@ -41,8 +41,8 @@ from desisky.training import (
 # from FITS/CSV using metadata[INPUT_FEATURES], which guarantees correct ordering
 # regardless of the column order in the user's file.
 INPUT_FEATURES = [
-    "MOONSEP", "MOONFRAC", "MOONALT",
-    "OBSALT", "TRANSPARENCY_GFA", "ECLIPSE_FRAC",
+    "MOONSEP", "OBSALT", "MOONALT",
+    "MOONFRAC", "TRANSPARENCY_GFA", "ECLIPSE_FRAC",
 ]
 IN_SIZE = 6
 OUT_SIZE = 4
@@ -69,7 +69,7 @@ def parse_args():
     # Data
     parser.add_argument("--data-path", type=str, default=None,
                         help="Path to user FITS or CSV file with required columns: "
-                             "MOONSEP, MOONFRAC, MOONALT, OBSALT, TRANSPARENCY_GFA, "
+                             "MOONSEP, OBSALT, MOONALT, MOONFRAC, TRANSPARENCY_GFA, "
                              "ECLIPSE_FRAC, V, g, r, z. Auto-detected by extension. "
                              "Default: download DESI moon-contaminated subset")
     # Checkpointing
@@ -137,7 +137,7 @@ def main():
     else:
         from desisky.data import SkySpecVAC
         vac = SkySpecVAC(version="v1.0", download=True)
-        wavelength, flux, metadata = vac.load_moon_contaminated(enrich=True)
+        wavelength, flux, metadata = vac.load_moon_contaminated()
         print(f"  Loaded {len(metadata):,} moon-contaminated observations")
 
         dataset = SkyBrightnessDataset(

@@ -45,7 +45,7 @@ desisky-infer-ldm --variant dark --cond-path my_conditions.npz --n-samples 100
 Accepts FITS (`.fits`) or CSV (`.csv`), auto-detected by extension.
 
 **Required columns:**
-- Input features: `MOONSEP`, `MOONFRAC`, `MOONALT`, `OBSALT`, `TRANSPARENCY_GFA`, `ECLIPSE_FRAC`
+- Input features: `MOONSEP`, `OBSALT`, `MOONALT`, `MOONFRAC`, `TRANSPARENCY_GFA`, `ECLIPSE_FRAC`
 - Target magnitudes: `V`, `g`, `r`, `z`
 - Optional: `EXPID` (exposure IDs, preserved in output)
 

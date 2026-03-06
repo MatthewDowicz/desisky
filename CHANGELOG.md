@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-03-05
+
+### Added
+
+- **Tutorial notebook** — `examples/00_tutorial.ipynb` covers every major capability end-to-end (data loading, enrichment, spectral analysis, broadband MLP, VAE, LDM dark/moon/twilight, validation, model I/O, training, CLI)
+- **Stochastic sampler** — `sample_edm_stochastic()` implements Algorithm 2 from Karras et al. 2022 (Langevin-corrected reverse SDE). Use `sampler.sample(stochastic=True)` for diverse ensemble generation.
+
+### Changed
+
+- `SkySpecVAC.load()` now auto-enriches with all 5 columns (V-band, eclipse fraction, solar flux, galactic coords, ecliptic coords); the `enrich` parameter has been removed
+- `load_dark_time()`, `load_sun_contaminated()`, `load_moon_contaminated()` no longer accept an `enrich` parameter
+
+### Removed
+
+- `00_quickstart.ipynb` — superseded by the tutorial notebook
+
 ## [0.6.0] - 2026-03-04
 
 ### Added
@@ -173,7 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for CPU and CUDA (GPU) installations
 - MIT License
 
-[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.6.0...HEAD
+[unreleased]: https://github.com/MatthewDowicz/desisky/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MatthewDowicz/desisky/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/MatthewDowicz/desisky/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MatthewDowicz/desisky/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MatthewDowicz/desisky/compare/v0.3.0...v0.4.0
