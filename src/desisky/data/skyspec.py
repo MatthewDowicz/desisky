@@ -144,8 +144,7 @@ class SkySpecVAC:
     >>> print(wave.shape)  # (7781,)
     >>> print(flux.shape)  # (9176, 7781)
     >>>
-    >>> # With enriched columns (V-band, ECLIPSE_FRAC) for v1.0 only
-    >>> wave, flux, meta = vac.load(enrich=True)
+    >>> # All enrichments are applied by default for v1.0
     >>> print('SKY_MAG_V_SPEC' in meta.columns)  # True (v1.0 only)
     >>> print('ECLIPSE_FRAC' in meta.columns)  # True (v1.0 only)
     >>>
@@ -184,8 +183,7 @@ class SkySpecVAC:
         self.dir = ensure_dir(base / spec.subdir)
         self.path = self.dir / spec.filename
         self.version = version
-        self._loaded: Optional[Tuple] = None  # memoized data (without enrichment)
-        self._loaded_enriched: Optional[Tuple] = None  # memoized data (with enrichment)
+        self._loaded: Optional[Tuple] = None  # memoized data
 
         if not self.path.exists():
             if download:
@@ -205,23 +203,27 @@ class SkySpecVAC:
         """Return the path to the FITS file on disk."""
         return self.path
 
-    def load(self, *, as_dataframe: bool = True, enrich: bool = False):
+    def load(self, *, as_dataframe: bool = True):
         """
         Load the VAC from disk and return (wavelength, flux, metadata).
 
-        Results are cached after the first call. Enrichment adds computed columns
-        (SKY_MAG_V_SPEC, ECLIPSE_FRAC) for v1.0 data only. Future VAC versions
-        may include these columns natively.
+        Results are cached after the first call. For v1.0 data, computed columns
+        are automatically added (the first call may be slow due to V-band
+        computation and coordinate transforms). Future VAC versions may include
+        these columns natively.
+
+        Enriched columns (v1.0 only):
+        - SKY_MAG_V_SPEC: V-band magnitude from spectra
+        - ECLIPSE_FRAC: Lunar eclipse umbral coverage fraction
+        - SOLFLUX: Daily 10.7 cm solar flux (sfu)
+        - GALLON, GALLAT: Galactic coordinates
+        - ECLLON, ECLLAT: Ecliptic coordinates
 
         Parameters
         ----------
         as_dataframe : bool, default True
             If True, return metadata as a pandas DataFrame. If False, return
-            as a structured numpy array.
-        enrich : bool, default False
-            If True and version is v1.0, add computed columns:
-            - SKY_MAG_V_SPEC: V-band magnitude from spectra
-            - ECLIPSE_FRAC: Lunar eclipse umbral coverage fraction
+            as a structured numpy array (enrichment is skipped).
 
         Returns
         -------
@@ -230,80 +232,77 @@ class SkySpecVAC:
         flux : np.ndarray
             2D array of flux values. Shape: (n_spectra, n_wavelengths)
         metadata : pd.DataFrame or np.ndarray
-            Metadata for each spectrum. If enrich=True, includes additional columns.
-
-        Raises
-        ------
-        ImportError
-            If enrichment dependencies (speclite, astropy) are not installed.
+            Metadata for each spectrum, including enriched columns for v1.0.
 
         Examples
         --------
-        >>> # Load without enrichment (fast)
         >>> wave, flux, meta = vac.load()
-        >>>
-        >>> # Load with enrichment (adds V-band and ECLIPSE_FRAC for v1.0)
-        >>> wave, flux, meta = vac.load(enrich=True)
+        >>> print('SOLFLUX' in meta.columns)  # True (v1.0)
         """
-        # Use appropriate cache
-        if enrich:
-            if self._loaded_enriched is None:
-                wavelength, flux, metadata = self._load_and_enrich(as_dataframe)
-                self._loaded_enriched = (wavelength, flux, metadata)
-            return self._loaded_enriched
-        else:
-            if self._loaded is None:
-                self._loaded = load_skyspec_vac(self.path, as_dataframe=as_dataframe)
-            return self._loaded
+        if self._loaded is None:
+            self._loaded = self._load_and_enrich(as_dataframe)
+        return self._loaded
 
     def _load_and_enrich(self, as_dataframe: bool = True):
-        """Load data and add enriched columns."""
-        from ._enrich import compute_vband_magnitudes, compute_eclipse_fraction
+        """Load data and add all enriched columns."""
+        from ._enrich import (
+            compute_vband_magnitudes,
+            compute_eclipse_fraction,
+            attach_solar_flux,
+            add_galactic_coordinates,
+            add_ecliptic_coordinates,
+        )
 
         # Load base data
         wavelength, flux, metadata = load_skyspec_vac(self.path, as_dataframe=as_dataframe)
 
-        # Only enrich v1.0 (future versions may have these columns natively)
-        if self.version != "v1.0":
+        # Only enrich v1.0 DataFrames (future versions may have these natively)
+        if self.version != "v1.0" or not as_dataframe:
             return wavelength, flux, metadata
 
-        # Only enrich DataFrames
-        if not as_dataframe:
-            import warnings
-            warnings.warn(
-                "Enrichment (enrich=True) requires as_dataframe=True. "
-                "Returning unenriched data.",
-                UserWarning,
-                stacklevel=3
-            )
-            return wavelength, flux, metadata
-
-        # Check if columns already exist (skip if present)
+        # V-band magnitude
         if 'SKY_MAG_V_SPEC' not in metadata.columns:
             try:
                 metadata['SKY_MAG_V_SPEC'] = compute_vband_magnitudes(flux, wavelength)
             except ImportError as e:
                 import warnings
-                warnings.warn(
-                    f"Skipping V-band enrichment: {e}",
-                    UserWarning,
-                    stacklevel=3
-                )
+                warnings.warn(f"Skipping V-band enrichment: {e}", UserWarning, stacklevel=3)
 
+        # Eclipse fraction
         if 'ECLIPSE_FRAC' not in metadata.columns:
             try:
                 metadata['ECLIPSE_FRAC'] = compute_eclipse_fraction(metadata)
             except ImportError as e:
                 import warnings
-                warnings.warn(
-                    f"Skipping ECLIPSE_FRAC enrichment: {e}",
-                    UserWarning,
-                    stacklevel=3
-                )
+                warnings.warn(f"Skipping ECLIPSE_FRAC enrichment: {e}", UserWarning, stacklevel=3)
+
+        # Solar flux
+        if 'SOLFLUX' not in metadata.columns:
+            try:
+                metadata = attach_solar_flux(metadata, verbose=False)
+            except (ImportError, FileNotFoundError) as e:
+                import warnings
+                warnings.warn(f"Skipping SOLFLUX enrichment: {e}", UserWarning, stacklevel=3)
+
+        # Galactic coordinates
+        if 'GALLON' not in metadata.columns:
+            try:
+                metadata = add_galactic_coordinates(metadata)
+            except ImportError as e:
+                import warnings
+                warnings.warn(f"Skipping galactic coord enrichment: {e}", UserWarning, stacklevel=3)
+
+        # Ecliptic coordinates
+        if 'ECLLON' not in metadata.columns:
+            try:
+                metadata = add_ecliptic_coordinates(metadata)
+            except ImportError as e:
+                import warnings
+                warnings.warn(f"Skipping ecliptic coord enrichment: {e}", UserWarning, stacklevel=3)
 
         return wavelength, flux, metadata
 
-    def load_dark_time(self, *, enrich: bool = True):
+    def load_dark_time(self):
         """
         Load subset of non-contaminated (dark time) observations.
 
@@ -312,11 +311,6 @@ class SkySpecVAC:
         - SUNALT < -20 (Sun well below horizon)
         - MOONALT < -5 (Moon below horizon)
         - TRANSPARENCY_GFA > 0 (valid transparency measurements)
-
-        Parameters
-        ----------
-        enrich : bool, default True
-            If True, add computed columns (SKY_MAG_V_SPEC, ECLIPSE_FRAC).
 
         Returns
         -------
@@ -333,8 +327,7 @@ class SkySpecVAC:
         >>> wave, flux, meta = vac.load_dark_time()
         >>> print(f"Dark-time: {len(meta)} observations")
         """
-        # Load full dataset with enrichment
-        wavelength, flux, metadata = self.load(as_dataframe=True, enrich=enrich)
+        wavelength, flux, metadata = self.load(as_dataframe=True)
 
         # Apply dark time filter
         dark_mask = (
@@ -349,7 +342,7 @@ class SkySpecVAC:
 
         return wavelength, flux_subset, meta_subset
 
-    def load_sun_contaminated(self, *, enrich: bool = True):
+    def load_sun_contaminated(self):
         """
         Load subset of sun-contaminated (twilight) observations.
 
@@ -359,11 +352,6 @@ class SkySpecVAC:
         - MOONALT <= -5 (Moon below horizon to exclude moon contamination)
         - SUNSEP <= 110 (Sun-pointing angular separation constraint)
         - TRANSPARENCY_GFA > 0 (valid transparency measurements)
-
-        Parameters
-        ----------
-        enrich : bool, default True
-            If True, add computed columns (SKY_MAG_V_SPEC, ECLIPSE_FRAC).
 
         Returns
         -------
@@ -380,8 +368,7 @@ class SkySpecVAC:
         >>> wave, flux, meta = vac.load_sun_contaminated()
         >>> print(f"Sun-contaminated: {len(meta)} observations")
         """
-        # Load full dataset with enrichment
-        wavelength, flux, metadata = self.load(as_dataframe=True, enrich=enrich)
+        wavelength, flux, metadata = self.load(as_dataframe=True)
 
         # Apply sun contamination filter
         sun_mask = (
@@ -397,7 +384,7 @@ class SkySpecVAC:
 
         return wavelength, flux_subset, meta_subset
 
-    def load_moon_contaminated(self, *, enrich: bool = True):
+    def load_moon_contaminated(self):
         """
         Load subset of observations with significant moon contamination.
 
@@ -408,14 +395,6 @@ class SkySpecVAC:
         - MOONFRAC > 0.5 (Moon >50% illuminated)
         - MOONSEP <= 90 (Moon within 90 degrees)
         - TRANSPARENCY_GFA > 0 (valid transparency measurements)
-
-        By default, enrichment is enabled to include ECLIPSE_FRAC, which is
-        important for modeling moon contamination effects.
-
-        Parameters
-        ----------
-        enrich : bool, default True
-            If True, add computed columns (SKY_MAG_V_SPEC, ECLIPSE_FRAC).
 
         Returns
         -------
@@ -432,8 +411,7 @@ class SkySpecVAC:
         >>> wave, flux, meta = vac.load_moon_contaminated()
         >>> print(f"Moon-contaminated: {len(meta)} observations")
         """
-        # Load full dataset with enrichment
-        wavelength, flux, metadata = self.load(as_dataframe=True, enrich=enrich)
+        wavelength, flux, metadata = self.load(as_dataframe=True)
 
         # Apply moon contamination filter
         moon_mask = (

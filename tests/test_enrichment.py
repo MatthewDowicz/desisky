@@ -465,36 +465,30 @@ class TestEclipticCoordinates:
 
 
 class TestSkySpecVACEnrichment:
-    """Tests for SkySpecVAC enrichment functionality."""
+    """Tests for SkySpecVAC auto-enrichment functionality."""
 
-    def test_load_without_enrichment(self):
-        """Test basic load without enrichment."""
-        from desisky.data import SkySpecVAC
-
-        vac = SkySpecVAC(version="v1.0", download=False)
-        wave, flux, meta = vac.load(enrich=False)
-
-        assert wave.shape == (7781,)
-        assert flux.shape[0] == 9176
-        assert len(meta) == 9176
-        assert 'SKY_MAG_V_SPEC' not in meta.columns
-        assert 'ECLIPSE_FRAC' not in meta.columns
-
-    def test_load_with_enrichment(self):
-        """Test load with enrichment adds V-band and ECLIPSE_FRAC."""
+    def test_load_enriches_automatically(self):
+        """Test that load() automatically adds all enriched columns."""
         from desisky.data import SkySpecVAC
 
         pytest.importorskip("speclite")
         pytest.importorskip("astropy")
 
         vac = SkySpecVAC(version="v1.0", download=False)
-        wave, flux, meta = vac.load(enrich=True)
+        wave, flux, meta = vac.load()
 
         assert wave.shape == (7781,)
         assert flux.shape[0] == 9176
         assert len(meta) == 9176
+
+        # All 5 enrichments should be present
         assert 'SKY_MAG_V_SPEC' in meta.columns
         assert 'ECLIPSE_FRAC' in meta.columns
+        assert 'SOLFLUX' in meta.columns
+        assert 'GALLON' in meta.columns
+        assert 'GALLAT' in meta.columns
+        assert 'ECLLON' in meta.columns
+        assert 'ECLLAT' in meta.columns
 
         # Check V-band values are reasonable
         assert meta['SKY_MAG_V_SPEC'].min() > 10
@@ -504,8 +498,14 @@ class TestSkySpecVACEnrichment:
         assert (meta['ECLIPSE_FRAC'] >= 0).all()
         assert (meta['ECLIPSE_FRAC'] <= 1).all()
 
+        # Check coordinate ranges
+        assert (meta['GALLON'] >= 0).all() and (meta['GALLON'] <= 360).all()
+        assert (meta['GALLAT'] >= -90).all() and (meta['GALLAT'] <= 90).all()
+        assert (meta['ECLLON'] >= 0).all() and (meta['ECLLON'] <= 360).all()
+        assert (meta['ECLLAT'] >= -90).all() and (meta['ECLLAT'] <= 90).all()
+
     def test_enrichment_caching(self):
-        """Test that enriched and non-enriched data are cached separately."""
+        """Test that enriched data is cached after first load."""
         from desisky.data import SkySpecVAC
 
         pytest.importorskip("speclite")
@@ -513,17 +513,11 @@ class TestSkySpecVACEnrichment:
 
         vac = SkySpecVAC(version="v1.0", download=False)
 
-        # Load without enrichment
-        _, _, meta1 = vac.load(enrich=False)
-        assert 'SKY_MAG_V_SPEC' not in meta1.columns
+        _, _, meta1 = vac.load()
+        _, _, meta2 = vac.load()
 
-        # Load with enrichment
-        _, _, meta2 = vac.load(enrich=True)
-        assert 'SKY_MAG_V_SPEC' in meta2.columns
-
-        # Load without enrichment again (should use cache)
-        _, _, meta3 = vac.load(enrich=False)
-        assert 'SKY_MAG_V_SPEC' not in meta3.columns
+        # Should return the same cached object
+        assert meta1 is meta2
 
     def test_load_moon_contaminated_subset(self):
         """Test moon-contaminated subset filtering."""
@@ -544,60 +538,29 @@ class TestSkySpecVACEnrichment:
         assert (meta['MOONALT'] > 5).all()
         assert (meta['MOONFRAC'] > 0.5).all()
         assert (meta['MOONSEP'] <= 90).all()
-        assert (meta['TRANSPARENCY_GFA'] > 0).all()  # New: filter invalid transparency
+        assert (meta['TRANSPARENCY_GFA'] > 0).all()
 
-        # Should have enrichment columns by default
+        # Should have enrichment columns
         assert 'SKY_MAG_V_SPEC' in meta.columns
         assert 'ECLIPSE_FRAC' in meta.columns
+        assert 'SOLFLUX' in meta.columns
+        assert 'GALLON' in meta.columns
 
         # Flux shape should match metadata
         assert flux.shape[0] == len(meta)
         assert flux.shape[1] == len(wave)
 
-    def test_moon_subset_without_enrichment(self):
-        """Test moon subset can be loaded without enrichment."""
+    def test_load_as_ndarray_skips_enrichment(self):
+        """Test that as_dataframe=False returns raw data without enrichment."""
         from desisky.data import SkySpecVAC
 
         vac = SkySpecVAC(version="v1.0", download=False)
-        wave, flux, meta = vac.load_moon_contaminated(enrich=False)
+        wave, flux, meta = vac.load(as_dataframe=False)
 
-        # Should still be moon-filtered
-        assert len(meta) < 9176
-        assert (meta['SUNALT'] < -20).all()
-
-        # But no enrichment columns
-        assert 'SKY_MAG_V_SPEC' not in meta.columns
-        assert 'ECLIPSE_FRAC' not in meta.columns
-
-    def test_enrichment_only_for_v10(self):
-        """Test that enrichment only applies to v1.0."""
-        from desisky.data import SkySpecVAC
-
-        pytest.importorskip("speclite")
-        pytest.importorskip("astropy")
-
-        # For future versions, enrichment should be skipped
-        # For now, only v1.0 exists, so this test documents the behavior
-        vac = SkySpecVAC(version="v1.0", download=False)
-
-        # This should work
-        wave, flux, meta = vac.load(enrich=True)
-        assert 'SKY_MAG_V_SPEC' in meta.columns
-
-    def test_enrichment_warns_without_dataframe(self):
-        """Test that enrichment warns if as_dataframe=False."""
-        from desisky.data import SkySpecVAC
-        import warnings
-
-        vac = SkySpecVAC(version="v1.0", download=False)
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            wave, flux, meta = vac.load(as_dataframe=False, enrich=True)
-
-            # Should warn about enrichment requiring DataFrame
-            assert len(w) > 0
-            assert "as_dataframe=True" in str(w[0].message)
+        assert wave.shape == (7781,)
+        assert flux.shape[0] == 9176
+        # Should be a structured numpy array, not a DataFrame
+        assert not hasattr(meta, 'columns')
 
     def test_load_dark_time_filtering(self):
         """Test dark time subset filtering criteria."""
@@ -618,9 +581,9 @@ class TestSkySpecVACEnrichment:
         assert (meta['MOONALT'] < -5).all(), "Dark time requires MOONALT < -5"
         assert (meta['TRANSPARENCY_GFA'] > 0).all(), "Dark time requires valid transparency"
 
-        # Verify enrichment by default
-        assert 'SKY_MAG_V_SPEC' in meta.columns, "Dark time should be enriched by default"
-        assert 'ECLIPSE_FRAC' in meta.columns, "Dark time should include eclipse fraction"
+        # Verify enrichment
+        assert 'SKY_MAG_V_SPEC' in meta.columns
+        assert 'ECLIPSE_FRAC' in meta.columns
 
         # Verify data integrity
         assert flux.shape[0] == len(meta), "Flux and metadata should match"
@@ -654,30 +617,18 @@ class TestSkySpecVACEnrichment:
         assert flux.shape[0] == len(meta)
         assert flux.shape[1] == len(wave)
 
-    def test_load_dark_time_without_enrichment(self):
-        """Test dark time subset can be loaded without enrichment."""
-        from desisky.data import SkySpecVAC
-
-        vac = SkySpecVAC(version="v1.0", download=False)
-        wave, flux, meta = vac.load_dark_time(enrich=False)
-
-        # Should still be filtered
-        assert len(meta) < 9176
-        assert (meta['SUNALT'] < -20).all()
-
-        # Should NOT have enriched columns
-        assert 'SKY_MAG_V_SPEC' not in meta.columns
-        assert 'ECLIPSE_FRAC' not in meta.columns
-
     def test_subset_sizes_reasonable(self):
         """Test that subset sizes are reasonable and mutually exclusive where expected."""
         from desisky.data import SkySpecVAC
 
+        pytest.importorskip("speclite")
+        pytest.importorskip("astropy")
+
         vac = SkySpecVAC(version="v1.0", download=False)
 
-        _, _, meta_dark = vac.load_dark_time(enrich=False)
-        _, _, meta_sun = vac.load_sun_contaminated(enrich=False)
-        _, _, meta_moon = vac.load_moon_contaminated(enrich=False)
+        _, _, meta_dark = vac.load_dark_time()
+        _, _, meta_sun = vac.load_sun_contaminated()
+        _, _, meta_moon = vac.load_moon_contaminated()
 
         # All should be non-empty
         assert len(meta_dark) > 0, "Dark time subset should not be empty"
@@ -698,11 +649,14 @@ class TestSkySpecVACEnrichment:
         """Test that all subsets return the same wavelength array."""
         from desisky.data import SkySpecVAC
 
+        pytest.importorskip("speclite")
+        pytest.importorskip("astropy")
+
         vac = SkySpecVAC(version="v1.0", download=False)
 
-        wave_dark, _, _ = vac.load_dark_time(enrich=False)
-        wave_sun, _, _ = vac.load_sun_contaminated(enrich=False)
-        wave_moon, _, _ = vac.load_moon_contaminated(enrich=False)
+        wave_dark, _, _ = vac.load_dark_time()
+        wave_sun, _, _ = vac.load_sun_contaminated()
+        wave_moon, _, _ = vac.load_moon_contaminated()
 
         assert np.array_equal(wave_dark, wave_sun), "Wavelength arrays should be identical"
         assert np.array_equal(wave_dark, wave_moon), "Wavelength arrays should be identical"

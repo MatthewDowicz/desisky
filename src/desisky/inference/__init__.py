@@ -6,6 +6,7 @@ from .sampling import (
     get_sigmas_karras,
     guided_denoiser,
     sample_edm,
+    sample_edm_stochastic,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "get_sigmas_karras",
     "guided_denoiser",
     "sample_edm",
+    "sample_edm_stochastic",
 ]

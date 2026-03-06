@@ -48,7 +48,7 @@ def get_validation_mask(
     >>> from desisky.data import SkySpecVAC, get_validation_mask
     >>> ldm, ldm_meta = load_builtin("ldm_dark")
     >>> vac = SkySpecVAC(download=True)
-    >>> wave, flux, meta = vac.load_dark_time(enrich=True)
+    >>> wave, flux, meta = vac.load_dark_time()
     >>> val_mask = get_validation_mask(meta, ldm_meta)
     Found 598 of 672 validation EXPIDs in metadata.
     >>> val_flux, val_meta = flux[val_mask], meta[val_mask]

@@ -48,7 +48,7 @@ class SkyBrightnessDataset(Dataset):
     >>> from desisky.data import SkySpecVAC
     >>> vac = SkySpecVAC(download=True)
     >>> wave, flux, meta = vac.load_moon_contaminated()
-    >>> input_features = ['MOONSEP', 'MOONFRAC', 'MOONALT', 'OBSALT',
+    >>> input_features = ['MOONSEP', 'OBSALT', 'MOONALT', 'MOONFRAC',
     ...                   'TRANSPARENCY_GFA', 'ECLIPSE_FRAC']
     >>> dataset = SkyBrightnessDataset(meta, flux, input_features)
     >>> inputs, targets, spectrum = dataset[0]
