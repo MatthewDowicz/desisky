@@ -1,0 +1,66 @@
+{
+  "platform": {
+    "platform": "gpu",
+    "device_kind": "NVIDIA GeForce RTX 3090",
+    "hostname": "entropy",
+    "python_version": "3.11.13",
+    "jax_version": "0.7.1",
+    "n_devices": 2
+  },
+  "results": [
+    {
+      "operation": "Broadband MLP (1000 rows)",
+      "first_ms": 856.5124608576298,
+      "avg_ms": 0.061476752161979675,
+      "n_repeats": 100
+    },
+    {
+      "operation": "VAE encode+decode (1000)",
+      "first_ms": 2894.8163837194443,
+      "avg_ms": 1.8044641241431236,
+      "n_repeats": 100
+    },
+    {
+      "operation": "LDM dark (100, deterministic)",
+      "first_ms": 6594.931129366159,
+      "avg_ms": 130.10292574763298,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM dark (100, stochastic)",
+      "first_ms": 3986.278086900711,
+      "avg_ms": 128.1224712729454,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM moon (100, deterministic)",
+      "first_ms": 3687.7714060246944,
+      "avg_ms": 127.74355746805668,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM twilight (100, deterministic)",
+      "first_ms": 3581.424832344055,
+      "avg_ms": 128.66226695477962,
+      "n_repeats": 10
+    },
+    {
+      "operation": "Broadband train (10 epochs)",
+      "first_ms": 1591.1997109651566,
+      "avg_ms": 65.99617625276248,
+      "n_repeats": 3
+    },
+    {
+      "operation": "VAE train (10 epochs)",
+      "first_ms": 6942.24339351058,
+      "avg_ms": 211.00162714719772,
+      "n_repeats": 3
+    },
+    {
+      "operation": "LDM dark train (10 epochs)",
+      "first_ms": 30812.325399369,
+      "avg_ms": 846.3019778331121,
+      "n_repeats": 3
+    }
+  ]
+}
