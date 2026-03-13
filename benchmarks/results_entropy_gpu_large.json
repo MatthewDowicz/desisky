@@ -1,0 +1,48 @@
+{
+  "platform": {
+    "platform": "gpu",
+    "device_kind": "NVIDIA GeForce RTX 3090",
+    "hostname": "entropy",
+    "python_version": "3.11.13",
+    "jax_version": "0.7.1",
+    "n_devices": 2
+  },
+  "results": [
+    {
+      "operation": "Broadband MLP (5000 rows)",
+      "first_ms": 664.1297824680805,
+      "avg_ms": 0.29028188437223434,
+      "n_repeats": 100
+    },
+    {
+      "operation": "VAE encode+decode (5000)",
+      "first_ms": 3741.7181879281998,
+      "avg_ms": 8.315895833075047,
+      "n_repeats": 100
+    },
+    {
+      "operation": "LDM dark (10000, deterministic)",
+      "first_ms": 10964.947234839201,
+      "avg_ms": 1929.8388123512268,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM dark (10000, stochastic)",
+      "first_ms": 6916.733723133802,
+      "avg_ms": 2008.1291239708662,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM moon (10000, deterministic)",
+      "first_ms": 6609.42392796278,
+      "avg_ms": 1985.3991381824017,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM twilight (10000, deterministic)",
+      "first_ms": 6465.452000498772,
+      "avg_ms": 1970.9487676620483,
+      "n_repeats": 10
+    }
+  ]
+}
