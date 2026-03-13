@@ -4,7 +4,7 @@
 
 """Visualization utilities for DESI sky brightness models."""
 
-from .plots import plot_loss_curve, plot_nn_outlier_analysis, plot_broadband_band_panel
+from .plots import plot_loss_curve, plot_nn_outlier_analysis, plot_broadband_band_panel, plot_latent_umap
 from .wandb_plots import (
     plot_vae_reconstructions,
     plot_latent_corner,
@@ -26,4 +26,5 @@ __all__ = [
     "plot_conditional_validation_grid",
     "plot_broadband_cdfs",
     "plot_airglow_cdfs",
+    "plot_latent_umap",
 ]
