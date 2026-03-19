@@ -163,7 +163,7 @@ def main():
     # [3/4] Generate Spectra
     print(f"\n[3/4] Generating {n_samples} spectra ({args.num_steps} Heun steps)...")
     sampler = LatentDiffusionSampler(
-        ldm_model=ldm,
+        ldm=ldm,
         vae_model=vae,
         sigma_data=sigma_data,
         conditioning_scaler=conditioning_scaler,

@@ -94,10 +94,10 @@ def make_ldm_epoch_callback(
             import warnings
 
             sampler = LatentDiffusionSampler(
-                ldm_model=ema_model, vae_model=vae,
+                ldm=ema_model, vae_model=vae,
                 sigma_data=config.sigma_data,
                 conditioning_scaler=scaler,
-                num_steps=250, latent_channels=1, latent_dim=8,
+                num_steps=250,
             )
 
             # Use all validation data
