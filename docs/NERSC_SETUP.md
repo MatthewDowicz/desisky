@@ -57,20 +57,11 @@ desisky-infer-ldm --variant dark --n-samples 1000 --output $PSCRATCH/dark_spectr
 import os
 os.environ["DESISKY_CACHE_DIR"] = "/pscratch/sd/m/mdowicz/desisky_cache"
 
-from desisky.io import load_model
 from desisky.inference import LatentDiffusionSampler
 import jax.random as jr
 import jax.numpy as jnp
 
-vae, _ = load_model("vae")
-ldm, meta = load_model("ldm_dark")
-
-sampler = LatentDiffusionSampler(
-    ldm_model=ldm, vae_model=vae,
-    sigma_data=meta["training"]["sigma_data"],
-    conditioning_scaler=meta["training"]["conditioning_scaler"],
-    num_steps=250,
-)
+sampler = LatentDiffusionSampler("ldm_dark", num_steps=250)
 
 conditioning = jnp.array([[70.0, 0.95, -40.0, 120.0, 180.0, 45.0, 90.0, 60.0]])
 spectra = sampler.sample(key=jr.PRNGKey(42), conditioning=conditioning, guidance_scale=1.0)

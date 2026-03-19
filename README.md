@@ -76,7 +76,7 @@ pip install desisky[all,cuda12]
 |-------|----------|
 | `cuda12` | jax[cuda12], equinox, optax, torch, tqdm |
 | `data` | fitsio, pandas, speclite, astropy |
-| `viz` | matplotlib |
+| `viz` | matplotlib, umap-learn |
 | `wandb` | wandb, matplotlib, pandas |
 | `all` | All of the above (CPU JAX) |
 
@@ -150,26 +150,14 @@ print(f"Batch latents: {batch_means.shape}")  # (9176, 8)
 ### Generate sky spectra with Latent Diffusion Model
 
 ```python
-from desisky.io import load_model
 from desisky.inference import LatentDiffusionSampler
 import jax.random as jr
 import jax.numpy as jnp
 
-# Load pre-trained VAE and LDM
-vae, _ = load_model("vae")
-ldm, ldm_meta = load_model("ldm_dark")
+# Create sampler (auto-loads model + VAE from pretrained checkpoints)
+sampler = LatentDiffusionSampler("ldm_dark")
 
-# Create sampler with EDM Heun solver
-sampler = LatentDiffusionSampler(
-    ldm_model=ldm,
-    vae_model=vae,
-    sigma_data=ldm_meta["training"]["sigma_data"],
-    conditioning_scaler=ldm_meta["training"]["conditioning_scaler"],
-    num_steps=100,
-)
-
-# Conditioning: [OBSALT, TRANSP, SUNALT, SOLFLUX, ECLLON, ECLLAT, GALLON, GALLAT]
-# Raw values — the sampler auto-normalizes via the conditioning scaler
+# Conditioning: [OBSALT, transparency, SUNALT, SOLFLUX, ECLLON, ECLLAT, GALLON, GALLAT]
 conditioning = jnp.array([
     [2100.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0],  # Dark sky
 ])
@@ -506,8 +494,23 @@ from desisky.visualization import (
     # General diagnostics
     plot_loss_curve,                   # Training/validation loss curves
     plot_nn_outlier_analysis,          # 2x3 diagnostic panel for MLP models
+    plot_latent_umap,                  # UMAP projection of latent space (requires umap-learn)
 )
 ```
+
+## Performance Benchmarks
+
+Key inference timings (after JIT compilation):
+
+| Operation | CPU | GPU (RTX 3090) | Speedup |
+|-----------|-----|----------------|---------|
+| LDM inference (100 spectra, deterministic) | ~4,500 ms | ~130 ms | **~35x** |
+| VAE encode+decode (1,000 spectra) | ~27 ms | ~1.8 ms | **~15x** |
+| Broadband MLP (1,000 rows) | ~0.06 ms | ~0.06 ms | ~1x |
+
+For practical inference runs (thousands of spectra), GPU is clearly worth it. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for full results across platforms.
+
+For running on NERSC Perlmutter with GPU support, see [`docs/NERSC_SETUP.md`](docs/NERSC_SETUP.md).
 
 ## Examples
 
