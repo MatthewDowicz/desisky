@@ -439,6 +439,7 @@ def plot_latent_umap(
     max_samples: Optional[int] = 50_000,
     title: str = "UMAP of Latent Space",
     figsize: tuple[int, int] = (10, 8),
+    fit_on: Optional[np.ndarray] = None,
 ) -> Figure:
     """Project latent vectors to 2-D with UMAP and visualize.
 
@@ -481,6 +482,10 @@ def plot_latent_umap(
         Figure title.
     figsize : tuple[int, int]
         Figure size in inches.
+    fit_on : np.ndarray | None
+        If provided, fit UMAP on these latents only, then transform
+        all *latents* through the learned mapping. Useful for comparing
+        real vs generated data — fit on real, project both.
 
     Returns
     -------
@@ -531,12 +536,20 @@ def plot_latent_umap(
     if continuous_var is not None:
         continuous_var = continuous_var[idx]
 
-    z2 = UMAP(
+    reducer = UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
         metric=metric,
         random_state=random_state,
-    ).fit_transform(latents)
+    )
+    if fit_on is not None:
+        fit_on = np.asarray(fit_on)
+        if fit_on.ndim != 2:
+            raise ValueError("`fit_on` must have shape (M, latent_dim)")
+        reducer.fit(fit_on)
+        z2 = reducer.transform(latents)
+    else:
+        z2 = reducer.fit_transform(latents)
 
     fig, ax = plt.subplots(figsize=figsize)
 
