@@ -673,6 +673,110 @@ class TestLatentDiffusionSampler:
 
 
 # =========================================================================
+# LatentDiffusionSampler — String-mode API Tests
+# =========================================================================
+
+class TestLatentDiffusionSamplerStringMode:
+    """Tests for the simplified string-based constructor."""
+
+    @pytest.fixture
+    def dummy_models(self):
+        """Create dummy LDM and VAE models for testing."""
+        from desisky.models.ldm import make_UNet1D_cond
+        from desisky.models.vae import SkyVAE
+
+        ldm = make_UNet1D_cond(
+            in_ch=1, out_ch=1, meta_dim=8,
+            hidden=16, levels=2, emb_dim=16,
+            key=jr.PRNGKey(0)
+        )
+        vae = SkyVAE(in_channels=100, latent_dim=8, key=jr.PRNGKey(1))
+        sigma_data = 6.7
+        meta = {
+            "schema": 3,
+            "arch": {"in_ch": 1, "out_ch": 1, "meta_dim": 8,
+                     "hidden": 16, "levels": 2, "emb_dim": 16},
+            "training": {
+                "sigma_data": sigma_data,
+                "conditioning_scaler": {
+                    "mean": [0.0] * 8,
+                    "scale": [1.0] * 8,
+                },
+            },
+        }
+        return ldm, vae, sigma_data, meta
+
+    def test_string_mode_basic(self, dummy_models):
+        """String mode auto-loads model, extracts meta, and sets default num_steps=50."""
+        from unittest.mock import patch
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, sigma_data, meta = dummy_models
+
+        with patch("desisky.io.load_model") as mock_load:
+            mock_load.side_effect = lambda kind, path=None: {
+                "ldm_dark": (ldm, meta),
+                "vae": (vae, {}),
+            }[kind]
+
+            sampler = LatentDiffusionSampler("ldm_dark")
+
+        assert sampler.sigma_data == sigma_data
+        assert sampler.ldm is ldm
+        assert sampler.vae is vae
+        assert sampler.config.num_steps == 50
+        assert sampler._scaler_mean is not None
+
+    def test_missing_sigma_data_raises(self, dummy_models):
+        """Passing a Module without sigma_data raises ValueError."""
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, _, _ = dummy_models
+
+        with pytest.raises(ValueError, match="sigma_data is required"):
+            LatentDiffusionSampler(ldm, vae)
+
+    def test_override_precedence(self, dummy_models):
+        """Explicit sigma_data and conditioning_scaler override meta values."""
+        from unittest.mock import patch
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, _, meta = dummy_models
+        custom_scaler = {"mean": [5.0] * 8, "scale": [2.0] * 8}
+
+        with patch("desisky.io.load_model") as mock_load:
+            mock_load.side_effect = lambda kind, path=None: {
+                "ldm_dark": (ldm, meta),
+                "vae": (vae, {}),
+            }[kind]
+
+            sampler = LatentDiffusionSampler(
+                "ldm_dark", sigma_data=99.0,
+                conditioning_scaler=custom_scaler,
+            )
+
+        assert sampler.sigma_data == 99.0
+        assert float(sampler._scaler_mean[0]) == 5.0
+
+    def test_ldm_path_passthrough(self, dummy_models):
+        """ldm_path is forwarded to load_model."""
+        from unittest.mock import patch, call
+        from desisky.inference import LatentDiffusionSampler
+
+        ldm, vae, _, meta = dummy_models
+
+        with patch("desisky.io.load_model") as mock_load:
+            mock_load.side_effect = lambda kind, path=None: {
+                "ldm_dark": (ldm, meta),
+                "vae": (vae, {}),
+            }[kind]
+
+            LatentDiffusionSampler("ldm_dark", ldm_path="/fake/checkpoint.eqx")
+
+        mock_load.assert_any_call("ldm_dark", path="/fake/checkpoint.eqx")
+
+
+# =========================================================================
 # Integration Tests (require pre-trained HuggingFace models)
 # =========================================================================
 
@@ -691,7 +795,7 @@ class TestLDMIntegration:
         sigma_data = ldm_meta["training"]["sigma_data"]
 
         sampler = LatentDiffusionSampler(
-            ldm_model=ldm,
+            ldm=ldm,
             vae_model=vae,
             sigma_data=sigma_data,
             num_steps=10,  # few steps for fast testing
