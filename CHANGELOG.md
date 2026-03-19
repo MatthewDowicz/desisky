@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-18
+
+### Added
+
+- **String-based sampler construction** — `LatentDiffusionSampler("ldm_dark")` auto-loads the pretrained model, VAE, and training metadata (sigma_data, conditioning_scaler) in one line
+- `ldm_path` / `vae_path` parameters for loading custom checkpoints with auto meta-extraction
+- `ValueError` with clear message when `sigma_data` is missing in Module mode
+- **UMAP latent-space visualization** — `plot_latent_umap()` function in `desisky.visualization`; `umap-learn` added as optional dependency under `viz` extras
+- `plot_latent_umap(fit_on=...)` parameter — fit UMAP on a reference dataset (e.g. real data) and project all points through the same mapping, for fair real-vs-generated comparisons
+- **NERSC setup guide** — `docs/NERSC_SETUP.md` with environment setup, GPU inference recipe, and cache configuration for Perlmutter
+- **Benchmarks** — `docs/BENCHMARKS.md` with Entropy CPU/GPU timing results; `benchmarks/timing.py` script for reproducible benchmarking
+
+### Changed
+
+- `LatentDiffusionSampler` first parameter renamed from `ldm_model` to `ldm`; accepts `str` (auto-load) or `eqx.Module` (manual). Positional callers `(module, vae, sigma_data)` are unaffected.
+- `vae_model` parameter now defaults to `None` (auto-loads pretrained VAE) instead of being required
+- `sigma_data` parameter now defaults to `None` (auto-extracted from checkpoint metadata in string mode) instead of being required
+- Default `num_steps` changed from 100 to 50 (fast option)
+- Renamed `TRANSPARENCY_GFA` to `transparency` in user-facing documentation and comments (programmatic column names unchanged)
+- **Tutorial notebook restructured** — reordered for user-facing workflows first (quick start → data → validation → internals), added table of contents, simplified framing for users without ML background
+- Latent corner plot histograms cleaned up for better readability
+
+### Breaking
+
+- Code using `ldm_model=` as a keyword argument must change to `ldm=`
+- Code relying on `num_steps` defaulting to 100 must now pass `num_steps=100` explicitly
+
 ## [0.7.0] - 2026-03-05
 
 ### Added

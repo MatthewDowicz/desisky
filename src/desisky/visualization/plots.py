@@ -411,3 +411,184 @@ def plot_nn_outlier_analysis(
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
     return fig
+
+
+# ============================================================================
+# UMAP Visualization
+# ============================================================================
+
+
+def plot_latent_umap(
+    latents: np.ndarray,
+    *,
+    discrete_labels: Optional[np.ndarray] = None,
+    subset: Optional[Sequence[str]] = None,
+    show_unclassified: bool = True,
+    unclassified_token: str = "Unclassified",
+    continuous_var: Optional[np.ndarray] = None,
+    continuous_name: str = "",
+    cmap: str = "viridis",
+    palette: Optional[dict[str, str]] = None,
+    alpha: float = 0.7,
+    marker_size: int = 8,
+    show_colorbar: bool = True,
+    n_neighbors: int = 30,
+    min_dist: float = 0.1,
+    metric: str = "euclidean",
+    random_state: int = 42,
+    max_samples: Optional[int] = 50_000,
+    title: str = "UMAP of Latent Space",
+    figsize: tuple[int, int] = (10, 8),
+    fit_on: Optional[np.ndarray] = None,
+) -> Figure:
+    """Project latent vectors to 2-D with UMAP and visualize.
+
+    Supports coloring by discrete class labels (e.g. sky condition) or
+    by a continuous variable (e.g. MOONFRAC).
+
+    Parameters
+    ----------
+    latents : np.ndarray
+        Latent vectors, shape ``(N, latent_dim)``.
+    discrete_labels : np.ndarray | None
+        Class labels for each sample, shape ``(N,)``.
+        Used for filtering and/or coloring (when *continuous_var* is None).
+    subset : Sequence[str] | None
+        Keep only these class labels.
+    show_unclassified : bool
+        Whether to keep rows with label == *unclassified_token*.
+    unclassified_token : str
+        Label marking unclassified points.
+    continuous_var : np.ndarray | None
+        Continuous variable for coloring, shape ``(N,)``.
+        Takes precedence over *discrete_labels* for coloring.
+    continuous_name : str
+        Colorbar label when using *continuous_var*.
+    cmap : str
+        Matplotlib colormap for continuous coloring.
+    palette : dict[str, str] | None
+        ``{label: color}`` for discrete coloring.
+    alpha : float
+        Marker transparency.
+    marker_size : int
+        Marker size.
+    show_colorbar : bool
+        Show colorbar when using *continuous_var*.
+    n_neighbors, min_dist, metric, random_state
+        UMAP hyperparameters.
+    max_samples : int | None
+        Randomly subsample to this many points for speed.
+    title : str
+        Figure title.
+    figsize : tuple[int, int]
+        Figure size in inches.
+    fit_on : np.ndarray | None
+        If provided, fit UMAP on these latents only, then transform
+        all *latents* through the learned mapping. Useful for comparing
+        real vs generated data — fit on real, project both.
+
+    Returns
+    -------
+    Figure
+        Matplotlib figure with UMAP projection.
+    """
+    try:
+        from umap import UMAP
+    except ImportError:
+        raise ImportError(
+            "umap-learn is required for UMAP visualization. "
+            "Install with: pip install umap-learn"
+        )
+
+    import itertools
+
+    latents = np.asarray(latents)
+    if latents.ndim != 2:
+        raise ValueError("`latents` must have shape (N, latent_dim)")
+
+    N = len(latents)
+    rng = np.random.default_rng(random_state)
+
+    keep = ~np.isnan(latents).any(axis=1)
+
+    if discrete_labels is not None:
+        discrete_labels = np.asarray(discrete_labels, dtype=str)
+        if len(discrete_labels) != N:
+            raise ValueError("`discrete_labels` length mismatch with `latents`")
+        if not show_unclassified:
+            keep &= discrete_labels != unclassified_token
+        if subset is not None:
+            keep &= np.isin(discrete_labels, list(subset))
+
+    if continuous_var is not None:
+        continuous_var = np.asarray(continuous_var, dtype=float)
+        if len(continuous_var) != N:
+            raise ValueError("`continuous_var` length mismatch with `latents`")
+        keep &= ~np.isnan(continuous_var)
+
+    idx = np.where(keep)[0]
+    if max_samples is not None and idx.size > max_samples:
+        idx = rng.choice(idx, size=max_samples, replace=False)
+
+    latents = latents[idx]
+    if discrete_labels is not None:
+        discrete_labels = discrete_labels[idx]
+    if continuous_var is not None:
+        continuous_var = continuous_var[idx]
+
+    reducer = UMAP(
+        n_neighbors=n_neighbors,
+        min_dist=min_dist,
+        metric=metric,
+        random_state=random_state,
+    )
+    if fit_on is not None:
+        fit_on = np.asarray(fit_on)
+        if fit_on.ndim != 2:
+            raise ValueError("`fit_on` must have shape (M, latent_dim)")
+        reducer.fit(fit_on)
+        z2 = reducer.transform(latents)
+    else:
+        z2 = reducer.fit_transform(latents)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if continuous_var is not None:
+        sc = ax.scatter(
+            z2[:, 0], z2[:, 1],
+            c=continuous_var, cmap=cmap,
+            s=marker_size, alpha=alpha, lw=0,
+        )
+        if show_colorbar:
+            cbar = fig.colorbar(sc, ax=ax, fraction=0.04, pad=0.02)
+            cbar.set_label(continuous_name, rotation=270, labelpad=15)
+    else:
+        if palette is None:
+            colours = itertools.cycle(plt.get_cmap("tab10").colors)
+            unique_labels = np.unique(discrete_labels) if discrete_labels is not None else []
+            palette = {lab: next(colours) for lab in unique_labels}
+
+        if discrete_labels is not None:
+            for lab in np.unique(discrete_labels):
+                mask = discrete_labels == lab
+                ax.scatter(
+                    z2[mask, 0], z2[mask, 1],
+                    s=marker_size, alpha=alpha,
+                    color=palette.get(lab, "black"),
+                    label=f"{lab} ({mask.sum():,})",
+                    lw=0,
+                )
+            ax.legend(frameon=True, fontsize=9, loc="upper right")
+        else:
+            ax.scatter(
+                z2[:, 0], z2[:, 1],
+                s=marker_size, alpha=alpha,
+                color="steelblue", lw=0,
+            )
+
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_xlabel("UMAP 1", fontsize=10)
+    ax.set_ylabel("UMAP 2", fontsize=10)
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    return fig

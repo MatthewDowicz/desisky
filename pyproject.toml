@@ -38,7 +38,7 @@ dependencies = [
 [project.optional-dependencies]
 cuda12 = ["jax[cuda12]", "equinox", "optax", "torch", "tqdm"]
 data   = ["fitsio", "pandas", "speclite", "astropy"]
-viz    = ["matplotlib"]
+viz    = ["matplotlib", "umap-learn"]
 wandb  = ["wandb", "matplotlib", "pandas"]
 all    = ["desisky[data,viz,wandb]", "optax", "torch", "tqdm"]
 

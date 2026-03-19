@@ -174,27 +174,15 @@ def plot_latent_corner(
                         mask = sky_conditions == cat
                         ax.hist(
                             latents[mask, i], bins=bins, density=True,
-                            alpha=0.5, color=color_map[cat], label=str(cat),
+                            histtype="stepfilled", alpha=0.45,
+                            color=color_map[cat], edgecolor=color_map[cat],
+                            linewidth=0.8, label=str(cat),
                         )
                 else:
                     ax.hist(latents[:, i], bins=bins, density=True,
-                            alpha=0.7, color="steelblue")
-
-                # Show mean +/- std
-                mu = latents[:, i].mean()
-                sigma = latents[:, i].std()
-                ax.axvline(mu, color="red", linestyle="-", linewidth=1.2)
-                ax.axvline(mu - sigma, color="red", linestyle="--", linewidth=0.8)
-                ax.axvline(mu + sigma, color="red", linestyle="--", linewidth=0.8)
-
-                # Stats text box
-                stats = f"${mu:.2f} \\pm {sigma:.2f}$"
-                ax.text(
-                    0.5, 1.05, stats, transform=ax.transAxes,
-                    ha="center", va="bottom", fontsize=7,
-                    bbox=dict(boxstyle="round", facecolor="white",
-                              alpha=0.8, edgecolor="gray", linewidth=0.5),
-                )
+                            histtype="stepfilled", alpha=0.6,
+                            color="steelblue", edgecolor="steelblue",
+                            linewidth=0.8)
 
             elif i > j:
                 # Lower triangle: scatter

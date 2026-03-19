@@ -16,36 +16,31 @@ Both use:
 
 Examples
 --------
-Basic usage:
+Simple usage (auto-loads models and training metadata):
 
 >>> from desisky.inference import LatentDiffusionSampler
->>> from desisky.io import load_builtin
+>>> import jax.random as jr
 >>>
->>> # Load models
->>> ldm, meta = load_builtin("ldm_dark")
->>> vae, _ = load_builtin("vae")
->>>
->>> # Create sampler (sigma_data and scaler from training metadata)
+>>> sampler = LatentDiffusionSampler("ldm_dark")
+>>> conditioning = jnp.array([[60.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0]])
+>>> spectra = sampler.sample(jr.PRNGKey(0), conditioning, guidance_scale=2.0)
+>>> spectra.shape
+(1, 7781)
+
+Advanced usage (pre-loaded models):
+
+>>> from desisky.io import load_model
+>>> ldm, meta = load_model("ldm_dark")
+>>> vae, _ = load_model("vae")
 >>> sampler = LatentDiffusionSampler(
 ...     ldm, vae,
 ...     sigma_data=meta["training"]["sigma_data"],
 ...     conditioning_scaler=meta["training"]["conditioning_scaler"],
 ... )
->>>
->>> # Generate samples (raw conditioning is auto-normalized)
->>> import jax.random as jr
->>> conditioning = jnp.array([[60.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0]])
->>> spectra = sampler.sample(
-...     key=jr.PRNGKey(0),
-...     conditioning=conditioning,
-...     n_samples=10,
-...     guidance_scale=2.0
-... )
->>> spectra.shape
-(10, 7781)
 """
 
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
+from pathlib import Path
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -428,22 +423,31 @@ class LatentDiffusionSampler:
     and Karras sigma schedule. Handles classifier-free guidance and
     VAE decoding.
 
+    The first argument (``ldm``) is polymorphic:
+
+    - **String** (e.g., ``"ldm_dark"``): auto-loads the pretrained model
+      and extracts ``sigma_data`` / ``conditioning_scaler`` from its
+      checkpoint metadata. A default VAE is also loaded automatically.
+    - **Module**: uses the model directly (backward-compatible with the
+      previous API). ``sigma_data`` is required in this mode.
+
     Parameters
     ----------
-    ldm_model : eqx.Module
-        Trained latent diffusion model (raw UNet F_theta).
-    vae_model : eqx.Module
-        Trained VAE for decoding latents to spectra.
-    sigma_data : float
-        Standard deviation of the training latents. This should match
-        the value used during training (stored in checkpoint metadata
-        under ``meta["training"]["sigma_data"]``).
+    ldm : str or eqx.Module
+        Model kind string (``"ldm_dark"``, ``"ldm_moon"``,
+        ``"ldm_twilight"``) for auto-loading, or a pre-loaded UNet
+        module for manual control.
+    vae_model : eqx.Module, optional
+        Trained VAE for decoding latents to spectra. If ``None``, the
+        default pretrained VAE is loaded automatically.
+    sigma_data : float, optional
+        Standard deviation of the training latents. Auto-extracted from
+        checkpoint metadata in string mode. Required when passing a
+        pre-loaded module.
     conditioning_scaler : dict, optional
         Conditioning feature normalization parameters from training.
-        If provided, raw conditioning inputs are automatically
-        standardized before sampling. Expected keys: ``"mean"`` and
-        ``"scale"`` (lists of per-feature values). Stored in checkpoint
-        metadata under ``meta["training"]["conditioning_scaler"]``.
+        Auto-extracted in string mode. If provided, raw conditioning
+        inputs are automatically standardized before sampling.
     num_steps : int
         Number of Heun solver steps (more steps = higher quality).
     sigma_min : float
@@ -456,48 +460,77 @@ class LatentDiffusionSampler:
         Number of latent channels (typically 1).
     latent_dim : int
         Latent dimension (typically 8).
+    ldm_path : str or Path, optional
+        Custom checkpoint path for the LDM (string mode only). Passed
+        to ``load_model(kind, path=ldm_path)``.
+    vae_path : str or Path, optional
+        Custom checkpoint path for the VAE. Used when ``vae_model`` is
+        ``None``.
 
     Examples
     --------
+    Simple (auto-loads everything):
+
     >>> from desisky.inference import LatentDiffusionSampler
-    >>> from desisky.io import load_builtin
-    >>> import jax.random as jr
-    >>>
-    >>> ldm, meta = load_builtin("ldm_dark")
-    >>> vae, _ = load_builtin("vae")
-    >>>
+    >>> sampler = LatentDiffusionSampler("ldm_dark")
+
+    With overrides:
+
+    >>> sampler = LatentDiffusionSampler("ldm_dark", num_steps=250)
+
+    Manual (pre-loaded models):
+
+    >>> from desisky.io import load_model
+    >>> ldm, meta = load_model("ldm_dark")
+    >>> vae, _ = load_model("vae")
     >>> sampler = LatentDiffusionSampler(
     ...     ldm, vae,
     ...     sigma_data=meta["training"]["sigma_data"],
     ...     conditioning_scaler=meta["training"]["conditioning_scaler"],
     ... )
-    >>>
-    >>> cond = jnp.array([
-    ...     [60.0, 0.9, -30.0, 150.0, 45.0, 10.0, 120.0, 5.0],
-    ... ])
-    >>> spectra = sampler.sample(jr.PRNGKey(0), cond, guidance_scale=2.0)
-    >>> spectra.shape
-    (1, 7781)
     """
 
     def __init__(
         self,
-        ldm_model: eqx.Module,
-        vae_model: eqx.Module,
-        sigma_data: float,
+        ldm: Union[str, eqx.Module] = "ldm_dark",
+        vae_model: Optional[eqx.Module] = None,
+        sigma_data: Optional[float] = None,
         conditioning_scaler: Optional[dict] = None,
-        num_steps: int = 100,
+        num_steps: int = 50,
         sigma_min: float = EDM_SIGMA_MIN,
         sigma_max: float = EDM_SIGMA_MAX,
         rho: float = 7.0,
         latent_channels: int = 1,
         latent_dim: int = 8,
+        ldm_path: Optional[Union[str, Path]] = None,
+        vae_path: Optional[Union[str, Path]] = None,
     ):
+        from desisky.io import load_model
+
+        if isinstance(ldm, str):
+            ldm_model, ldm_meta = load_model(ldm, path=ldm_path)
+            training = ldm_meta.get("training", {})
+            if sigma_data is None:
+                sigma_data = training["sigma_data"]
+            if conditioning_scaler is None:
+                conditioning_scaler = training.get("conditioning_scaler")
+        else:
+            ldm_model = ldm
+
+        if vae_model is None:
+            vae_model, _ = load_model("vae", path=vae_path)
+
+        if sigma_data is None:
+            raise ValueError(
+                "sigma_data is required when passing a pre-loaded model. "
+                "Either pass a model kind string (e.g., 'ldm_dark') for "
+                "auto-extraction, or provide sigma_data explicitly."
+            )
+
         self.ldm = ldm_model
         self.vae = vae_model
         self.sigma_data = sigma_data
 
-        # Conditioning normalization (StandardScaler params from training)
         self._scaler_mean = None
         self._scaler_scale = None
         if conditioning_scaler is not None:

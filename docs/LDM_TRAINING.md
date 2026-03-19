@@ -337,7 +337,7 @@ See `examples/08_ldm_wandb_training.ipynb` for a complete working example.
 from desisky.inference import LatentDiffusionSampler
 
 sampler = LatentDiffusionSampler(
-    ldm_model=ema_model,     # Use EMA model for best quality
+    ldm=ema_model,           # Use EMA model for best quality
     vae_model=vae,
     sigma_data=sigma_data,
     conditioning_scaler=scaler,
