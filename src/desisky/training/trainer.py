@@ -237,16 +237,22 @@ class BroadbandTrainer:
         """Core training loop with wandb logging and callback support."""
         opt_state = self.optimizer.init(eqx.filter(self.model, eqx.is_array))
 
+        # Extract from self so the closure captures only plain values,
+        # not the entire trainer (which includes self.model's JAX arrays).
+        loss_name = self.config.loss
+        huber_delta = self.config.huber_delta
+        optimizer = self.optimizer
+
         @eqx.filter_jit
         def make_step(model, opt_state, inputs, targets):
             lval, grads = eqx.filter_value_and_grad(loss_func)(
                 model,
                 jnp.asarray(inputs),
                 jnp.asarray(targets),
-                loss_name=self.config.loss,
-                huber_delta=self.config.huber_delta,
+                loss_name=loss_name,
+                huber_delta=huber_delta,
             )
-            updates, opt_state = self.optimizer.update(grads, opt_state, model)
+            updates, opt_state = optimizer.update(grads, opt_state, model)
             model = eqx.apply_updates(model, updates)
             return model, opt_state, lval
 

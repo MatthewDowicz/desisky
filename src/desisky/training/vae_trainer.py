@@ -331,6 +331,12 @@ class VAETrainer:
         if kernel_sigma == "auto":
             kernel_sigma = default_kernel_sigma(self.model.latent_dim)
 
+        # Extract from self so the closure captures only plain values,
+        # not the entire trainer (which includes self.model's JAX arrays).
+        beta = self.config.beta
+        lam = self.config.lam
+        optimizer = self.optimizer
+
         # JIT-compile training step for performance
         @eqx.filter_jit
         def make_step(model, opt_state, x, key):
@@ -339,11 +345,11 @@ class VAETrainer:
                 model,
                 x=x,
                 key=key,
-                beta=self.config.beta,
-                lam=self.config.lam,
+                beta=beta,
+                lam=lam,
                 kernel_sigma=kernel_sigma
             )
-            updates, opt_state = self.optimizer.update(grads, opt_state, model)
+            updates, opt_state = optimizer.update(grads, opt_state, model)
             model = eqx.apply_updates(model, updates)
             return model, opt_state, loss, aux
 

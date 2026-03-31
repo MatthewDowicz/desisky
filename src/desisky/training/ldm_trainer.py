@@ -605,6 +605,10 @@ class LatentDiffusionTrainer:
         cfg = self.config
         opt_state = self.optimizer.init(eqx.filter(self.model, eqx.is_array))
 
+        # Extract from self so the closure captures only plain values,
+        # not the entire trainer (which includes self.model's JAX arrays).
+        optimizer = self.optimizer
+
         # JIT-compile EDM training step
         @eqx.filter_jit
         def make_step(model, opt_state, x, cond, key):
@@ -618,7 +622,7 @@ class LatentDiffusionTrainer:
                 cfg.p_mean,
                 cfg.p_std,
             )
-            updates, opt_state = self.optimizer.update(grads, opt_state, model)
+            updates, opt_state = optimizer.update(grads, opt_state, model)
             model = eqx.apply_updates(model, updates)
             return model, opt_state, loss
 
