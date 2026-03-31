@@ -158,6 +158,27 @@ class VAETrainingHistory:
     config: Optional[VAETrainingConfig] = None
 
 
+@eqx.filter_jit
+def _make_step(model, opt_state, x, key, optimizer, beta, lam, kernel_sigma):
+    """JIT-compiled VAE training step.
+
+    Defined at module level with zero closure variables to avoid JIT issues
+    on certain GPU architectures (A100 + JAX 0.9.x).  Non-array arguments
+    (optimizer, beta, lam, kernel_sigma) are treated as static by filter_jit.
+    """
+    (loss, aux), grads = eqx.filter_value_and_grad(vae_loss_infovae, has_aux=True)(
+        model,
+        x=x,
+        key=key,
+        beta=beta,
+        lam=lam,
+        kernel_sigma=kernel_sigma,
+    )
+    updates, opt_state = optimizer.update(grads, opt_state, model)
+    model = eqx.apply_updates(model, updates)
+    return model, opt_state, loss, aux
+
+
 class VAETrainer:
     """
     Trainer for Variational Autoencoder models with InfoVAE-MMD objective.
@@ -331,27 +352,9 @@ class VAETrainer:
         if kernel_sigma == "auto":
             kernel_sigma = default_kernel_sigma(self.model.latent_dim)
 
-        # Extract from self so the closure captures only plain values,
-        # not the entire trainer (which includes self.model's JAX arrays).
         beta = self.config.beta
         lam = self.config.lam
         optimizer = self.optimizer
-
-        # JIT-compile training step for performance
-        @eqx.filter_jit
-        def make_step(model, opt_state, x, key):
-            """Single training step: compute loss, gradients, and update model."""
-            (loss, aux), grads = eqx.filter_value_and_grad(vae_loss_infovae, has_aux=True)(
-                model,
-                x=x,
-                key=key,
-                beta=beta,
-                lam=lam,
-                kernel_sigma=kernel_sigma
-            )
-            updates, opt_state = optimizer.update(grads, opt_state, model)
-            model = eqx.apply_updates(model, updates)
-            return model, opt_state, loss, aux
 
         # Random key for sampling
         key = jr.PRNGKey(self.config.random_seed)
@@ -380,8 +383,9 @@ class VAETrainer:
                     x = jnp.asarray(x)
 
                 # Perform training step
-                self.model, opt_state, loss_value, aux = make_step(
-                    self.model, opt_state, x, subkey
+                self.model, opt_state, loss_value, aux = _make_step(
+                    self.model, opt_state, x, subkey,
+                    optimizer, beta, lam, kernel_sigma,
                 )
 
                 # Accumulate statistics
