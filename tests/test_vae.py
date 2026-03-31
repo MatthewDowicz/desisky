@@ -493,5 +493,64 @@ class TestSkyVAEEdgeCases:
         assert jnp.all(jnp.isfinite(result['output']))
 
 
+class TestSkyVAEBatchNoVmap:
+    """Test that encode/decode/forward handle batches natively without vmap."""
+
+    @pytest.fixture
+    def vae(self):
+        return SkyVAE(in_channels=100, latent_dim=8, key=jr.PRNGKey(0))
+
+    def test_encode_batch_no_vmap(self, vae):
+        batch = jnp.ones((16, 100)) * 10.0
+        mean, logvar = vae.encode(batch)
+        assert mean.shape == (16, 8)
+        assert logvar.shape == (16, 8)
+
+    def test_decode_batch_no_vmap(self, vae):
+        batch_latents = jnp.ones((16, 8))
+        reconstructed = vae.decode(batch_latents)
+        assert reconstructed.shape == (16, 100)
+
+    def test_forward_batch_no_vmap(self, vae):
+        batch = jnp.ones((16, 100)) * 10.0
+        key = jr.PRNGKey(42)
+        result = vae(batch, key)
+        assert result['mean'].shape == (16, 8)
+        assert result['logvar'].shape == (16, 8)
+        assert result['latent'].shape == (16, 8)
+        assert result['output'].shape == (16, 100)
+
+    def test_batch_equivalence_with_vmap(self, vae):
+        """Verify batched encode/decode matches vmap'd single-sample encode/decode."""
+        batch = jax.random.normal(jr.PRNGKey(0), (16, vae.in_channels))
+
+        # Encode: direct batch vs vmap
+        mean_batch, logvar_batch = vae.encode(batch)
+        mean_vmap, logvar_vmap = jax.vmap(vae.encode)(batch)
+        assert jnp.allclose(mean_batch, mean_vmap, atol=1e-5), \
+            f"encode mean mismatch: max diff = {jnp.max(jnp.abs(mean_batch - mean_vmap))}"
+        assert jnp.allclose(logvar_batch, logvar_vmap, atol=1e-5), \
+            f"encode logvar mismatch: max diff = {jnp.max(jnp.abs(logvar_batch - logvar_vmap))}"
+
+        # Decode: direct batch vs vmap
+        latents = jnp.ones((16, 8))
+        recon_batch = vae.decode(latents)
+        recon_vmap = jax.vmap(vae.decode)(latents)
+        assert jnp.allclose(recon_batch, recon_vmap, atol=1e-5), \
+            f"decode mismatch: max diff = {jnp.max(jnp.abs(recon_batch - recon_vmap))}"
+
+    def test_forward_inside_filter_jit(self, vae):
+        """Verify forward pass compiles inside @eqx.filter_jit."""
+        @eqx.filter_jit
+        def jitted_forward(model, x, key):
+            return model(x, key)
+
+        batch = jnp.ones((16, 100)) * 10.0
+        key = jr.PRNGKey(42)
+        result = jitted_forward(vae, batch, key)
+        assert result['mean'].shape == (16, 8)
+        assert result['output'].shape == (16, 100)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -20,6 +20,25 @@ import equinox as eqx
 from desisky.io.model_io import register_model, ModelSpec
 
 
+def _forward_sequential(seq: eqx.nn.Sequential, x: jnp.ndarray) -> jnp.ndarray:
+    """Apply a Sequential of Linear+activation layers to single or batched input.
+
+    Uses ``x @ weight.T`` instead of ``weight @ x`` for Linear layers, so it
+    handles both ``(features,)`` and ``(batch, features)`` inputs without
+    ``vmap``.  This avoids a JAX XLA compilation issue where ``vmap`` inside
+    ``filter_jit`` fails on certain GPU architectures (e.g. A100s with
+    JAX >= 0.9.1).
+    """
+    for layer in seq.layers:
+        if isinstance(layer, eqx.nn.Linear):
+            x = x @ layer.weight.T
+            if layer.bias is not None:
+                x = x + layer.bias
+        else:
+            x = layer(x)
+    return x
+
+
 class SkyVAE(eqx.Module):
     """
     Variational Autoencoder for DESI sky spectra.
@@ -63,13 +82,16 @@ class SkyVAE(eqx.Module):
     >>> result = vae(sky_spectrum, jr.PRNGKey(0))
     >>> # result contains: 'mean', 'logvar', 'output', 'latent'
 
-    For batch processing:
+    For batch processing (no vmap needed):
 
     >>> # Encode batch of spectra
-    >>> means, logvars = jax.vmap(vae.encode)(batch_of_spectra)
+    >>> means, logvars = vae.encode(batch_of_spectra)
     >>>
     >>> # Decode batch of latents
-    >>> reconstructed_batch = jax.vmap(vae.decode)(batch_of_latents)
+    >>> reconstructed_batch = vae.decode(batch_of_latents)
+    >>>
+    >>> # jax.vmap also still works:
+    >>> means, logvars = jax.vmap(vae.encode)(batch_of_spectra)
     """
 
     in_channels: int
@@ -152,20 +174,15 @@ class SkyVAE(eqx.Module):
         """
         Full forward pass: encode, sample, decode.
 
-        This method handles both single samples and batches:
-        - Single sample: x.shape = (in_channels,)
-        - Batch: x.shape = (batch_size, in_channels)
-
-        For batched inputs, encode and decode are vmapped, but sample handles
-        the batch internally via broadcasting.
+        Handles both single samples and batches natively (no vmap).
 
         Parameters
         ----------
         x : jnp.ndarray
-            Input spectrum. Shape (in_channels,) for single sample
-            or (batch_size, in_channels) for batch.
+            Input spectrum. Shape ``(in_channels,)`` for single sample
+            or ``(batch_size, in_channels)`` for batch.
         key : jax.random.PRNGKey
-            Random key for sampling latent space
+            Random key for sampling latent space.
 
         Returns
         -------
@@ -186,50 +203,34 @@ class SkyVAE(eqx.Module):
         >>> result = vae(batch_of_spectra, key)
         >>> result['mean'].shape  # (batch_size, latent_dim)
         """
-        # Check if input is batched
-        is_batched = x.ndim == 2
-
-        if is_batched:
-            # Batch processing: vmap encode and decode, but not sample
-            mean, logvar = jax.vmap(self.encode)(x)
-            z = self.sample(mean, logvar, key)  # sample handles batches internally
-            out = jax.vmap(self.decode)(z)
-        else:
-            # Single sample processing
-            mean, logvar = self.encode(x)
-            z = self.sample(mean, logvar, key)
-            out = self.decode(z)
-
-        return {
-            'mean': mean,
-            'logvar': logvar,
-            'latent': z,
-            'output': out
-        }
+        mean, logvar = self.encode(x)
+        z = self.sample(mean, logvar, key)
+        out = self.decode(z)
+        return {'mean': mean, 'logvar': logvar, 'latent': z, 'output': out}
 
     def encode(self, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         """
         Encode input spectrum to latent distribution parameters.
 
+        Handles both single inputs ``(in_channels,)`` and batches
+        ``(batch_size, in_channels)``.
+
         Parameters
         ----------
         x : jnp.ndarray
-            Input spectrum of shape (in_channels,)
+            Input spectrum of shape ``(in_channels,)`` or
+            ``(batch_size, in_channels)``.
 
         Returns
         -------
         mean : jnp.ndarray
-            Latent mean, shape (latent_dim,)
+            Latent mean, shape ``(latent_dim,)`` or ``(batch_size, latent_dim)``.
         logvar : jnp.ndarray
-            Latent log-variance, shape (latent_dim,)
+            Latent log-variance, same shape as mean.
         """
-        out = self.common_fc(x)
-        mean = self.mean_fc(out)
-        log_var = self.log_var_fc(out)
-        # CRITICAL: Clip log_var to prevent exp() explosion in sampling
-        # Without this, exp(0.5 * log_var) can become huge, causing NaN
-        # This protects both the forward pass AND the gradient computation
-        # log_var = jnp.clip(log_var, -10.0, 10.0)
+        out = _forward_sequential(self.common_fc, x)
+        mean = _forward_sequential(self.mean_fc, out)
+        log_var = _forward_sequential(self.log_var_fc, out)
         return mean, log_var
 
     def sample(
@@ -269,18 +270,22 @@ class SkyVAE(eqx.Module):
         """
         Decode latent vector to reconstructed spectrum.
 
+        Handles both single latents ``(latent_dim,)`` and batches
+        ``(batch_size, latent_dim)``.
+
         Parameters
         ----------
         z : jnp.ndarray
-            Latent vector, shape (latent_dim,)
+            Latent vector, shape ``(latent_dim,)`` or
+            ``(batch_size, latent_dim)``.
 
         Returns
         -------
         spectrum : jnp.ndarray
-            Reconstructed spectrum, shape (in_channels,)
+            Reconstructed spectrum, shape ``(in_channels,)`` or
+            ``(batch_size, in_channels)``.
         """
-        out = self.decoder_fcs(z)
-        return out
+        return _forward_sequential(self.decoder_fcs, z)
 
 
 def make_SkyVAE(
