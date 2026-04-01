@@ -366,7 +366,17 @@ class BroadbandTrainer:
         save_path = save_dir / f"{self._resolve_run_name()}.eqx"
 
         # Compute per-band RMSE on test set
-        all_inputs, all_targets, _, _ = gather_full_data(test_loader)
+        try:
+            all_inputs, all_targets, _, _ = gather_full_data(test_loader)
+        except AttributeError:
+            # User data uses TensorDataset (no .metadata attribute).
+            # Gather inputs/targets directly from batches.
+            inputs_list, targets_list = [], []
+            for batch in test_loader:
+                inputs_list.append(np.asarray(batch[0]))
+                targets_list.append(np.asarray(batch[1]))
+            all_inputs = np.concatenate(inputs_list)
+            all_targets = np.concatenate(targets_list)
         per_band_rmse = self._compute_per_band_rmse(all_inputs, all_targets)
 
         # Extract model architecture from the model itself
