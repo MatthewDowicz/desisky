@@ -111,67 +111,6 @@ def evaluate(model, test_data, n_batches, bs, in_channels, key):
 
 
 # ---------------------------------------------------------------------------
-# Wandb visualization callback
-# ---------------------------------------------------------------------------
-def run_visualizations(model, wavelength, test_flux, test_conditions, epoch):
-    """Log reconstruction plots, latent corners, broadband & airglow CDFs to wandb."""
-    try:
-        from desisky.training.wandb_utils import log_figure
-        from desisky.visualization import (
-            plot_vae_reconstructions,
-            plot_latent_corner,
-            plot_broadband_cdfs,
-            plot_airglow_cdfs,
-        )
-        import matplotlib.pyplot as plt
-
-        wl_np = np.array(wavelength)
-        key = jr.PRNGKey(epoch)
-        n_show = 5
-
-        # 1. Reconstruction plot
-        test_batch = jnp.array(test_flux[:n_show])
-        result = model(test_batch, key)
-        fig_recon = plot_vae_reconstructions(
-            np.array(test_batch), np.array(result["output"]), wl_np, n_samples=n_show,
-        )
-        log_figure("viz/reconstructions", fig_recon, epoch)
-        plt.close(fig_recon)
-
-        # 2. Latent corner plot colored by sky condition
-        enc_result = model(jnp.array(test_flux), jr.PRNGKey(epoch + 1))
-        latents = np.array(enc_result["latent"])
-        fig_corner = plot_latent_corner(
-            latents,
-            labels=[f"z{i}" for i in range(latents.shape[1])],
-            sky_conditions=test_conditions,
-            condition_names=["dark", "moon", "other", "twilight"],
-        )
-        log_figure("viz/latent_corner", fig_corner, epoch)
-        plt.close(fig_corner)
-
-        # 3. Broadband CDFs
-        cdf_result = model(jnp.array(test_flux), jr.PRNGKey(epoch + 2))
-        real_spectra = np.array(test_flux)
-        recon_spectra = np.array(cdf_result["output"])
-
-        bb_results = plot_broadband_cdfs(wl_np, real_spectra, recon_spectra)
-        for band_name, (fig, emd) in bb_results.items():
-            log_figure(f"viz/{band_name}", fig, epoch)
-            plt.close(fig)
-
-        # 4. Airglow CDFs
-        ag_results = plot_airglow_cdfs(wl_np, real_spectra, recon_spectra)
-        for line_name, (fig, emd) in ag_results.items():
-            safe_name = line_name.replace(" ", "_").replace("(", "-").replace(")", "-")
-            log_figure(f"viz/{safe_name}", fig, epoch)
-            plt.close(fig)
-
-    except Exception as e:
-        print(f"  Warning: viz callback failed at epoch {epoch}: {e}")
-
-
-# ---------------------------------------------------------------------------
 # CLI arguments
 # ---------------------------------------------------------------------------
 def parse_args():
@@ -417,6 +356,7 @@ def main():
             # --- wandb logging ---
             if use_wandb:
                 import wandb
+                import matplotlib.pyplot as plt
                 log_dict = {
                     "train/loss": epoch_loss,
                     "train/recon": epoch_recon,
@@ -433,12 +373,61 @@ def main():
                         "val/mmd": test_metrics["mmd"],
                         "val/loss_z": test_metrics["kl"] + test_metrics["mmd"],
                     })
+
+                # Add visualizations to the same log call (avoids step conflicts)
+                if epoch % args.viz_every == 0:
+                    try:
+                        from desisky.visualization import (
+                            plot_vae_reconstructions,
+                            plot_latent_corner,
+                            plot_broadband_cdfs,
+                            plot_airglow_cdfs,
+                        )
+                        wl_np = np.array(wavelength)
+                        viz_key = jr.PRNGKey(epoch)
+
+                        # 1. Reconstruction plot
+                        test_batch = jnp.array(test_flux[:5])
+                        result = model(test_batch, viz_key)
+                        fig_recon = plot_vae_reconstructions(
+                            np.array(test_batch), np.array(result["output"]), wl_np, n_samples=5,
+                        )
+                        log_dict["viz/reconstructions"] = wandb.Image(fig_recon)
+                        plt.close(fig_recon)
+
+                        # 2. Latent corner plot colored by sky condition
+                        enc_result = model(jnp.array(test_flux), jr.PRNGKey(epoch + 1))
+                        latents = np.array(enc_result["latent"])
+                        fig_corner = plot_latent_corner(
+                            latents,
+                            labels=[f"z{i}" for i in range(latents.shape[1])],
+                            sky_conditions=test_conditions,
+                            condition_names=["dark", "moon", "other", "twilight"],
+                        )
+                        log_dict["viz/latent_corner"] = wandb.Image(fig_corner)
+                        plt.close(fig_corner)
+
+                        # 3. Broadband CDFs
+                        cdf_result = model(jnp.array(test_flux), jr.PRNGKey(epoch + 2))
+                        real_spectra = np.array(test_flux)
+                        recon_spectra = np.array(cdf_result["output"])
+                        bb_results = plot_broadband_cdfs(wl_np, real_spectra, recon_spectra)
+                        for band_name, (fig, emd) in bb_results.items():
+                            log_dict[f"viz/{band_name}"] = wandb.Image(fig)
+                            plt.close(fig)
+
+                        # 4. Airglow CDFs
+                        ag_results = plot_airglow_cdfs(wl_np, real_spectra, recon_spectra)
+                        for line_name, (fig, emd) in ag_results.items():
+                            safe_name = line_name.replace(" ", "_").replace("(", "-").replace(")", "-")
+                            log_dict[f"viz/{safe_name}"] = wandb.Image(fig)
+                            plt.close(fig)
+
+                    except Exception as e:
+                        print(f"  Warning: viz failed at epoch {epoch}: {e}")
+
                 if epoch % args.log_every == 0:
                     wandb.log(log_dict)
-
-                # Visualizations
-                if epoch % args.viz_every == 0:
-                    run_visualizations(model, wavelength, test_flux, test_conditions, epoch)
 
         print(f"\nDone. Best test loss: {best_test_loss:.6f} (epoch {best_epoch})")
 
