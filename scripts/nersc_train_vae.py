@@ -196,6 +196,10 @@ def parse_args():
     p.add_argument("--data-path", type=str, default=None,
                     help="Path to user .npz (required key: flux (N,7781)). "
                          "Default: full DESI SkySpecVAC")
+    p.add_argument("--metadata-path", type=str, default=None,
+                    help="Path to CSV with metadata (SUNALT, MOONALT, etc.) for "
+                         "sky condition classification in wandb visualizations. "
+                         "Rows must align with --data-path flux.")
     # Checkpointing
     p.add_argument("--run-name", type=str, default="vae_nersc")
     p.add_argument("--save-dir", type=str, default=None)
@@ -234,9 +238,18 @@ def main():
     if args.data_path:
         data = np.load(args.data_path)
         flux = data["flux"]
-        metadata = None
         wavelength, _, _ = vac.load()
         print(f"  Loaded user data: {flux.shape[0]:,} spectra from {args.data_path}")
+
+        if args.metadata_path:
+            import pandas as pd
+            metadata = pd.read_csv(args.metadata_path)
+            print(f"  Loaded metadata: {len(metadata):,} rows from {args.metadata_path}")
+            if len(metadata) != len(flux):
+                print(f"  Warning: metadata rows ({len(metadata)}) != flux rows ({len(flux)}), disabling sky conditions")
+                metadata = None
+        else:
+            metadata = None
     else:
         wavelength, flux, metadata = vac.load()
         print(f"  Loaded {len(flux):,} spectra from DESI SkySpecVAC")
