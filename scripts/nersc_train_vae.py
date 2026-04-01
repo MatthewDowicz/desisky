@@ -323,6 +323,8 @@ def main():
             tags=tags,
         )
         run_name = args.run_name if args.run_name != "vae_nersc" else wandb.run.name
+        wandb.define_metric("epoch")
+        wandb.define_metric("*", step_metric="epoch")
         print(f"  wandb run: {wandb.run.url}")
     else:
         run_name = args.run_name
