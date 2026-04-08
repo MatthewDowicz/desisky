@@ -211,6 +211,10 @@ def parse_args():
     parser.add_argument("--wandb-tags", type=str, default="")
     parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--viz-every", type=int, default=20)
+    # Quality filtering
+    parser.add_argument("--no-quality-filter", action="store_true",
+                        help="Disable automatic removal of known contaminated "
+                             "observations (e.g., June 2021 wildfire event)")
     # Other
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--print-every", type=int, default=5)
@@ -265,6 +269,15 @@ def main():
             conditioning = data["conditioning"]
             wavelength = data["wavelength"]
             print(f"  Loaded pre-processed data: {flux.shape[0]:,} spectra")
+            if not args.no_quality_filter:
+                import warnings
+                warnings.warn(
+                    "Quality filter cannot be applied to .npz data (no metadata). "
+                    "Ensure your data was pre-filtered, or use "
+                    "desisky.data.filter_known_contamination() during data "
+                    "preparation.",
+                    UserWarning, stacklevel=1,
+                )
         elif ext in (".fits", ".csv"):
             # Raw data with metadata columns — auto-filter by variant
             if ext == ".fits":
@@ -289,6 +302,13 @@ def main():
             metadata = metadata[variant_mask].reset_index(drop=True)
             print(f"  Filtered {variant}: {len(metadata):,} / {n_before:,} spectra")
 
+            # Remove known contaminated observations
+            if not args.no_quality_filter:
+                from desisky.data import filter_known_contamination
+                metadata, flux, _ = filter_known_contamination(
+                    metadata, flux, verbose=True,
+                )
+
             # Enrich and extract conditioning
             from desisky.data import (
                 attach_solar_flux, add_galactic_coordinates,
@@ -312,7 +332,8 @@ def main():
         print(f"  Loaded {len(flux):,} {variant} spectra from {p.name}")
     else:
         from desisky.data import SkySpecVAC
-        vac = SkySpecVAC(version="v1.0", download=True)
+        vac = SkySpecVAC(version="v1.0", download=True,
+                         exclude_known_bad=not args.no_quality_filter)
         # Map CLI variant names to SkySpecVAC method names
         loader_names = {
             "dark": "load_dark_time",

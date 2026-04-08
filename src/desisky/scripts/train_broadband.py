@@ -85,6 +85,10 @@ def parse_args():
                         help="Comma-separated wandb tags")
     parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--viz-every", type=int, default=50)
+    # Quality filtering
+    parser.add_argument("--no-quality-filter", action="store_true",
+                        help="Disable automatic removal of known contaminated "
+                             "observations (e.g., June 2021 wildfire event)")
     # Other
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--print-every", type=int, default=50)
@@ -121,6 +125,13 @@ def main():
 
         print(f"  Loaded user data from {args.data_path} ({len(metadata):,} rows)")
 
+        # Remove known contaminated observations
+        if not args.no_quality_filter:
+            from desisky.data import filter_known_contamination
+            metadata, _, _ = filter_known_contamination(
+                metadata, verbose=True,
+            )
+
         # User data has pre-computed magnitudes, so we bypass SkyBrightnessDataset
         # (which requires raw spectra + the SKY_MAG_*_SPEC column naming convention).
         # Build inputs/targets arrays directly from the named columns.
@@ -136,7 +147,8 @@ def main():
         )
     else:
         from desisky.data import SkySpecVAC
-        vac = SkySpecVAC(version="v1.0", download=True)
+        vac = SkySpecVAC(version="v1.0", download=True,
+                         exclude_known_bad=not args.no_quality_filter)
         wavelength, flux, metadata = vac.load_moon_contaminated()
         print(f"  Loaded {len(metadata):,} moon-contaminated observations")
 
