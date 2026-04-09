@@ -184,8 +184,9 @@ def main():
     # [4/4] Save Output
     print("\n[4/4] Saving output...")
     from desisky.data import SkySpecVAC
-    vac = SkySpecVAC(version="v1.0", download=True)
-    wavelength, _, _ = vac.load()
+    # Only need wavelength grid for output file — skip filter
+    wavelength, _, _ = SkySpecVAC(version="v1.0", download=True,
+                                  exclude_known_bad=False).load()
 
     out_path = Path(args.output)
     np.savez(

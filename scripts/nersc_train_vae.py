@@ -172,11 +172,12 @@ def main():
 
     # [1/5] Load Data
     print("\n[1/5] Loading sky spectra...")
-    vac = SkySpecVAC(version="v1.0", download=True)
-
     if args.data_path:
         data = np.load(args.data_path)
         flux = data["flux"]
+        # Only need wavelength grid — skip quality filter to avoid duplicate
+        # message (user data is expected to be pre-filtered)
+        vac = SkySpecVAC(version="v1.0", download=True, exclude_known_bad=False)
         wavelength, _, _ = vac.load()
         print(f"  Loaded user data: {flux.shape[0]:,} spectra from {args.data_path}")
 
@@ -190,6 +191,7 @@ def main():
         else:
             metadata = None
     else:
+        vac = SkySpecVAC(version="v1.0", download=True)
         wavelength, flux, metadata = vac.load()
         print(f"  Loaded {len(flux):,} spectra from DESI SkySpecVAC")
 

@@ -66,15 +66,16 @@ def main():
     # [2/3] Load Data
     print("\n[2/3] Loading data...")
     from desisky.data import SkySpecVAC
-    vac = SkySpecVAC(version="v1.0", download=True)
 
     if args.data_path:
         data = np.load(args.data_path)
         flux = data["flux"]
-        # DESI wavelength grid (hardcoded)
-        wavelength, _, _ = vac.load()
+        # Only need wavelength grid — skip filter (user data should be pre-filtered)
+        wavelength, _, _ = SkySpecVAC(version="v1.0", download=True,
+                                      exclude_known_bad=False).load()
         print(f"  Loaded user data: {flux.shape[0]:,} spectra")
     else:
+        vac = SkySpecVAC(version="v1.0", download=True)
         if args.subset == "full":
             wavelength, flux, metadata = vac.load()
         elif args.subset == "dark":
