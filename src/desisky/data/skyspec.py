@@ -126,6 +126,11 @@ class SkySpecVAC:
         If True, downloads the dataset when missing.
     verify : bool, default True
         If True and a SHA-256 checksum is known, verify integrity after download.
+    exclude_known_bad : bool, default True
+        If True, automatically remove observations from known contaminated
+        periods (e.g., June 4-12 2021 Arizona wildfire aerosol event). See
+        ``desisky.data.KNOWN_BAD_PERIODS`` for the full list. Set to False
+        to load all observations including known bad data.
 
     Attributes
     ----------
@@ -174,6 +179,7 @@ class SkySpecVAC:
         version: str = "v1.0",
         download: bool = False,
         verify: bool = True,
+        exclude_known_bad: bool = True,
     ):
         if version not in REGISTRY:
             raise KeyError(f"Unknown SkySpec VAC version: {version!r}")
@@ -183,6 +189,7 @@ class SkySpecVAC:
         self.dir = ensure_dir(base / spec.subdir)
         self.path = self.dir / spec.filename
         self.version = version
+        self.exclude_known_bad = exclude_known_bad
         self._loaded: Optional[Tuple] = None  # memoized data
 
         if not self.path.exists():
@@ -299,6 +306,13 @@ class SkySpecVAC:
             except ImportError as e:
                 import warnings
                 warnings.warn(f"Skipping ecliptic coord enrichment: {e}", UserWarning, stacklevel=3)
+
+        # Remove known contaminated observations
+        if self.exclude_known_bad:
+            from ._quality import filter_known_contamination
+            metadata, flux, _ = filter_known_contamination(
+                metadata, flux, verbose=True,
+            )
 
         return wavelength, flux, metadata
 

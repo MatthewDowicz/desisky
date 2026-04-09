@@ -161,6 +161,10 @@ def parse_args():
     parser.add_argument("--wandb-tags", type=str, default="")
     parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--viz-every", type=int, default=10)
+    # Quality filtering
+    parser.add_argument("--no-quality-filter", action="store_true",
+                        help="Disable automatic removal of known contaminated "
+                             "observations (e.g., June 2021 wildfire event)")
     # Other
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--print-every", type=int, default=10)
@@ -177,7 +181,9 @@ def main():
     # [1/5] Load Data
     print("\n[1/5] Loading sky spectra...")
     from desisky.data import SkySpecVAC
-    vac = SkySpecVAC(version="v1.0", download=True)
+    quality_filter = not args.no_quality_filter
+    vac = SkySpecVAC(version="v1.0", download=True,
+                     exclude_known_bad=quality_filter)
 
     if args.data_path:
         data = np.load(args.data_path)
@@ -185,6 +191,14 @@ def main():
         metadata = None
         # DESI wavelength grid for wandb CDF visualizations
         wavelength, _, _ = vac.load()
+        if quality_filter:
+            import warnings
+            warnings.warn(
+                "Quality filter cannot be applied to .npz data (no metadata). "
+                "Ensure your data was pre-filtered, or use "
+                "desisky.data.filter_known_contamination() during data preparation.",
+                UserWarning, stacklevel=1,
+            )
         print(f"  Loaded user data: {flux.shape[0]:,} spectra from {args.data_path}")
     else:
         wavelength, flux, metadata = vac.load()

@@ -478,8 +478,9 @@ class TestSkySpecVACEnrichment:
         wave, flux, meta = vac.load()
 
         assert wave.shape == (7781,)
-        assert flux.shape[0] == 9176
-        assert len(meta) == 9176
+        # 9176 total minus known contaminated observations (e.g., June 2021 fires)
+        assert flux.shape[0] == len(meta)
+        assert len(meta) < 9176
 
         # All 5 enrichments should be present
         assert 'SKY_MAG_V_SPEC' in meta.columns
@@ -661,3 +662,92 @@ class TestSkySpecVACEnrichment:
         assert np.array_equal(wave_dark, wave_sun), "Wavelength arrays should be identical"
         assert np.array_equal(wave_dark, wave_moon), "Wavelength arrays should be identical"
         assert len(wave_dark) == 7781, "Wavelength array should have 7781 points"
+
+
+class TestQualityFilter:
+    """Tests for the known contamination quality filter."""
+
+    def test_filter_removes_bad_nights(self):
+        """Test that filter_known_contamination removes the expected nights."""
+        import pandas as pd
+        from desisky.data import filter_known_contamination
+
+        meta = pd.DataFrame({
+            "NIGHT": [20210601, 20210605, 20210610, 20210615, 20220101],
+        })
+        flux = np.ones((5, 10))
+
+        meta_out, flux_out, n_removed = filter_known_contamination(
+            meta, flux, verbose=False,
+        )
+        assert n_removed == 2  # June 5 and June 10
+        assert len(meta_out) == 3
+        assert flux_out.shape[0] == 3
+        assert set(meta_out["NIGHT"]) == {20210601, 20210615, 20220101}
+
+    def test_filter_no_bad_nights(self):
+        """Test that filter passes through data with no bad nights."""
+        import pandas as pd
+        from desisky.data import filter_known_contamination
+
+        meta = pd.DataFrame({"NIGHT": [20220101, 20220201, 20220301]})
+        meta_out, flux_out, n_removed = filter_known_contamination(
+            meta, verbose=False,
+        )
+        assert n_removed == 0
+        assert len(meta_out) == 3
+        assert flux_out is None
+
+    def test_filter_works_with_mjd(self):
+        """Test that filter can compute NIGHT from MJD column."""
+        import pandas as pd
+        from desisky.data import filter_known_contamination
+
+        # MJD for June 6, 2021 is approximately 59371
+        meta = pd.DataFrame({"MJD": [59371.5, 59400.5]})
+        meta_out, _, n_removed = filter_known_contamination(
+            meta, verbose=False,
+        )
+        assert n_removed == 1
+        assert len(meta_out) == 1
+
+    def test_filter_warns_without_night_or_mjd(self):
+        """Test that filter warns when no NIGHT or MJD column exists."""
+        import pandas as pd
+        import warnings
+        from desisky.data import filter_known_contamination
+
+        meta = pd.DataFrame({"SUNALT": [-30.0, -25.0]})
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            meta_out, _, n_removed = filter_known_contamination(
+                meta, verbose=True,
+            )
+            assert n_removed == 0
+            assert len(meta_out) == 2
+            assert len(w) == 1
+            assert "Quality filter skipped" in str(w[0].message)
+
+    def test_exclude_known_bad_false_keeps_all(self):
+        """Test that SkySpecVAC with exclude_known_bad=False keeps all data."""
+        from desisky.data import SkySpecVAC
+
+        pytest.importorskip("speclite")
+        pytest.importorskip("astropy")
+
+        vac = SkySpecVAC(version="v1.0", download=False, exclude_known_bad=False)
+        _, flux, meta = vac.load()
+        assert len(meta) == 9176
+        assert flux.shape[0] == 9176
+
+    def test_exclude_known_bad_true_removes_data(self):
+        """Test that SkySpecVAC with exclude_known_bad=True removes data."""
+        from desisky.data import SkySpecVAC
+
+        pytest.importorskip("speclite")
+        pytest.importorskip("astropy")
+
+        vac = SkySpecVAC(version="v1.0", download=False, exclude_known_bad=True)
+        _, flux, meta = vac.load()
+        assert len(meta) < 9176
+        assert flux.shape[0] == len(meta)

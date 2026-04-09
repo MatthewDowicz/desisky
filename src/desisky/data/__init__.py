@@ -14,6 +14,7 @@ from ._enrich import (
     add_galactic_coordinates,
     add_ecliptic_coordinates,
 )
+from ._quality import filter_known_contamination, KNOWN_BAD_PERIODS
 from ._spectral import (
     measure_airglow_intensities,
     compute_broadband_mags,
@@ -38,6 +39,8 @@ __all__ = [
     "attach_solar_flux",
     "add_galactic_coordinates",
     "add_ecliptic_coordinates",
+    "filter_known_contamination",
+    "KNOWN_BAD_PERIODS",
     "get_validation_mask",
     "measure_airglow_intensities",
     "compute_broadband_mags",
