@@ -83,10 +83,18 @@ def main():
     if not args.no_enrich:
         print("Enriching metadata...")
         from desisky.data import (
+            compute_eclipse_fraction,
             attach_solar_flux,
             add_galactic_coordinates,
             add_ecliptic_coordinates,
         )
+        try:
+            if "ECLIPSE_FRAC" not in metadata.columns:
+                metadata["ECLIPSE_FRAC"] = compute_eclipse_fraction(metadata)
+                print("  Added ECLIPSE_FRAC")
+        except Exception as e:
+            print(f"  Warning: ECLIPSE_FRAC enrichment failed: {e}")
+
         try:
             if "SOLFLUX" not in metadata.columns:
                 metadata = attach_solar_flux(metadata, verbose=False)
