@@ -158,152 +158,6 @@ class VAETrainingHistory:
     config: Optional[VAETrainingConfig] = None
 
 
-@eqx.filter_jit
-def _make_step(model, opt_state, x, key, optimizer, beta, lam, kernel_sigma):
-    """JIT-compiled VAE training step.
-
-    Defined at module level with zero closure variables to avoid JIT issues
-    on certain GPU architectures (A100 + JAX 0.9.x).  Non-array arguments
-    (optimizer, beta, lam, kernel_sigma) are treated as static by filter_jit.
-    """
-    (loss, aux), grads = eqx.filter_value_and_grad(vae_loss_infovae, has_aux=True)(
-        model,
-        x=x,
-        key=key,
-        beta=beta,
-        lam=lam,
-        kernel_sigma=kernel_sigma,
-    )
-    updates, opt_state = optimizer.update(grads, opt_state, model)
-    model = eqx.apply_updates(model, updates)
-    return model, opt_state, loss, aux
-
-
-def _run_train_loop(trainer, train_loader, test_loader):
-    """Module-level training loop for VAETrainer.
-
-    Extracted from the class method to work around a JIT compilation issue
-    on A100 GPUs (JAX 0.9.x) where ``eqx.filter_jit`` functions called from
-    within class methods produce invalid CUDA kernels.  The identical code
-    works when defined at module level.
-    """
-    opt_state = trainer.optimizer.init(eqx.filter(trainer.model, eqx.is_array))
-
-    kernel_sigma = trainer.config.kernel_sigma
-    if kernel_sigma == "auto":
-        kernel_sigma = default_kernel_sigma(trainer.model.latent_dim)
-
-    beta = trainer.config.beta
-    lam = trainer.config.lam
-    optimizer = trainer.optimizer
-
-    key = jr.PRNGKey(trainer.config.random_seed)
-
-    epoch_iter = range(trainer.config.epochs)
-    if tqdm is not None:
-        epoch_iter = tqdm(epoch_iter, desc="VAE Training")
-
-    for epoch in epoch_iter:
-        epoch_loss = 0.0
-        epoch_recon = 0.0
-        epoch_kl = 0.0
-        epoch_mmd = 0.0
-        n_samples = 0
-
-        for x in train_loader:
-            key, subkey = jr.split(key)
-            if not isinstance(x, jnp.ndarray):
-                x = jnp.asarray(x)
-
-            trainer.model, opt_state, loss_value, aux = _make_step(
-                trainer.model, opt_state, x, subkey,
-                optimizer, beta, lam, kernel_sigma,
-            )
-
-            bsz = len(x)
-            n_samples += bsz
-            epoch_loss += float(loss_value) * bsz
-            epoch_recon += float(aux["recon"]) * bsz
-            epoch_kl += float(aux["kl_weighted"]) * bsz
-            epoch_mmd += float(aux["mmd_weighted"]) * bsz
-
-        epoch_loss /= n_samples
-        epoch_recon /= n_samples
-        epoch_kl /= n_samples
-        epoch_mmd /= n_samples
-
-        trainer.history.train_losses.append(epoch_loss)
-        trainer.history.train_recon.append(epoch_recon)
-        trainer.history.train_kl.append(epoch_kl)
-        trainer.history.train_mmd.append(epoch_mmd)
-
-        if trainer.wandb_config is not None:
-            from .wandb_utils import log_epoch_metrics
-            if epoch % trainer.wandb_config.log_every == 0:
-                log_epoch_metrics({
-                    "loss": epoch_loss,
-                    "recon": epoch_recon,
-                    "kl": epoch_kl,
-                    "mmd": epoch_mmd,
-                    "loss_z": epoch_kl + epoch_mmd,
-                }, epoch, prefix="train/")
-
-        if test_loader is not None and epoch % trainer.config.validate_every == 0:
-            key, subkey = jr.split(key)
-            test_loss, test_aux = trainer._evaluate(test_loader, subkey, kernel_sigma)
-
-            trainer.history.test_losses.append(float(test_loss))
-            trainer.history.test_recon.append(float(test_aux["recon"]))
-            trainer.history.test_kl.append(float(test_aux["kl_weighted"]))
-            trainer.history.test_mmd.append(float(test_aux["mmd_weighted"]))
-
-            if trainer.wandb_config is not None:
-                from .wandb_utils import log_epoch_metrics
-                if epoch % trainer.wandb_config.log_every == 0:
-                    log_epoch_metrics({
-                        "loss": float(test_loss),
-                        "recon": float(test_aux["recon"]),
-                        "kl": float(test_aux["kl_weighted"]),
-                        "mmd": float(test_aux["mmd_weighted"]),
-                        "loss_z": float(test_aux.get("loss_z", 0)),
-                    }, epoch, prefix="val/")
-
-            if test_loss < trainer.history.best_test_loss:
-                trainer.history.best_test_loss = float(test_loss)
-                trainer.history.best_epoch = epoch
-                if trainer.config.save_best:
-                    trainer._save_checkpoint(epoch, test_loss, test_aux)
-
-            if tqdm is not None and isinstance(epoch_iter, tqdm):
-                epoch_iter.set_postfix(
-                    train=f"{epoch_loss:.4f}",
-                    test=f"{float(test_loss):.4f}",
-                    best=f"{trainer.history.best_test_loss:.4f}",
-                )
-
-            if tqdm is None and epoch % trainer.config.print_every == 0:
-                print(
-                    f"Epoch {epoch:4d}/{trainer.config.epochs} | "
-                    f"Train: {epoch_loss:.6f} (R:{epoch_recon:.4f} KL:{epoch_kl:.4f} MMD:{epoch_mmd:.4f}) | "
-                    f"Test: {test_loss:.6f} (R:{test_aux['recon']:.4f}) | "
-                    f"Best: {trainer.history.best_test_loss:.6f}"
-                )
-
-        elif test_loader is None:
-            if tqdm is not None and isinstance(epoch_iter, tqdm):
-                epoch_iter.set_postfix(train=f"{epoch_loss:.4f}")
-            if tqdm is None and epoch % trainer.config.print_every == 0:
-                print(
-                    f"Epoch {epoch:4d}/{trainer.config.epochs} | "
-                    f"Train: {epoch_loss:.6f}"
-                )
-
-        if trainer.on_epoch_end is not None:
-            trainer.on_epoch_end(trainer.model, trainer.history, epoch)
-
-    return trainer.model, trainer.history
-
-
 class VAETrainer:
     """
     Trainer for Variational Autoencoder models with InfoVAE-MMD objective.
@@ -469,9 +323,157 @@ class VAETrainer:
         test_loader: Optional[DataLoader],
     ) -> tuple[eqx.Module, VAETrainingHistory]:
         """Core training loop, separated for clean wandb try/finally."""
-        # Delegate to module-level function to avoid A100 JIT issues
-        # (see _run_train_loop docstring for details).
-        return _run_train_loop(self, train_loader, test_loader)
+        # Initialize optimizer state
+        opt_state = self.optimizer.init(eqx.filter(self.model, eqx.is_array))
+
+        # Compute kernel bandwidth if auto
+        kernel_sigma = self.config.kernel_sigma
+        if kernel_sigma == "auto":
+            kernel_sigma = default_kernel_sigma(self.model.latent_dim)
+
+        # JIT-compile training step for performance
+        @eqx.filter_jit
+        def make_step(model, opt_state, x, key):
+            """Single training step: compute loss, gradients, and update model."""
+            (loss, aux), grads = eqx.filter_value_and_grad(vae_loss_infovae, has_aux=True)(
+                model,
+                x=x,
+                key=key,
+                beta=self.config.beta,
+                lam=self.config.lam,
+                kernel_sigma=kernel_sigma
+            )
+            updates, opt_state = self.optimizer.update(grads, opt_state, model)
+            model = eqx.apply_updates(model, updates)
+            return model, opt_state, loss, aux
+
+        # Random key for sampling
+        key = jr.PRNGKey(self.config.random_seed)
+
+        # Build epoch iterator with optional tqdm progress bar
+        epoch_iter = range(self.config.epochs)
+        if tqdm is not None:
+            epoch_iter = tqdm(epoch_iter, desc="VAE Training")
+
+        # Main training loop
+        for epoch in epoch_iter:
+            # Accumulators for epoch statistics
+            epoch_loss = 0.0
+            epoch_recon = 0.0
+            epoch_kl = 0.0
+            epoch_mmd = 0.0
+            n_samples = 0
+
+            # Training step over all batches
+            for x in train_loader:
+                # Split key for this batch
+                key, subkey = jr.split(key)
+
+                # Ensure x is JAX array
+                if not isinstance(x, jnp.ndarray):
+                    x = jnp.asarray(x)
+
+                # Perform training step
+                self.model, opt_state, loss_value, aux = make_step(
+                    self.model, opt_state, x, subkey
+                )
+
+                # Accumulate statistics
+                bsz = len(x)
+                n_samples += bsz
+                epoch_loss += float(loss_value) * bsz
+                epoch_recon += float(aux["recon"]) * bsz
+                epoch_kl += float(aux["kl_weighted"]) * bsz
+                epoch_mmd += float(aux["mmd_weighted"]) * bsz
+
+            # Compute epoch-averaged losses
+            epoch_loss /= n_samples
+            epoch_recon /= n_samples
+            epoch_kl /= n_samples
+            epoch_mmd /= n_samples
+
+            # Store training metrics
+            self.history.train_losses.append(epoch_loss)
+            self.history.train_recon.append(epoch_recon)
+            self.history.train_kl.append(epoch_kl)
+            self.history.train_mmd.append(epoch_mmd)
+
+            # Log training metrics to wandb
+            if self.wandb_config is not None:
+                from .wandb_utils import log_epoch_metrics
+                if epoch % self.wandb_config.log_every == 0:
+                    log_epoch_metrics({
+                        "loss": epoch_loss,
+                        "recon": epoch_recon,
+                        "kl": epoch_kl,
+                        "mmd": epoch_mmd,
+                        "loss_z": epoch_kl + epoch_mmd,
+                    }, epoch, prefix="train/")
+
+            # Validation step (if test_loader provided)
+            if test_loader is not None and epoch % self.config.validate_every == 0:
+                key, subkey = jr.split(key)
+                test_loss, test_aux = self._evaluate(test_loader, subkey, kernel_sigma)
+
+                # Store test metrics
+                self.history.test_losses.append(float(test_loss))
+                self.history.test_recon.append(float(test_aux["recon"]))
+                self.history.test_kl.append(float(test_aux["kl_weighted"]))
+                self.history.test_mmd.append(float(test_aux["mmd_weighted"]))
+
+                # Log validation metrics to wandb
+                if self.wandb_config is not None:
+                    from .wandb_utils import log_epoch_metrics
+                    if epoch % self.wandb_config.log_every == 0:
+                        log_epoch_metrics({
+                            "loss": float(test_loss),
+                            "recon": float(test_aux["recon"]),
+                            "kl": float(test_aux["kl_weighted"]),
+                            "mmd": float(test_aux["mmd_weighted"]),
+                            "loss_z": float(test_aux.get("loss_z", 0)),
+                        }, epoch, prefix="val/")
+
+                # Check if this is the best model
+                if test_loss < self.history.best_test_loss:
+                    self.history.best_test_loss = float(test_loss)
+                    self.history.best_epoch = epoch
+
+                    if self.config.save_best:
+                        self._save_checkpoint(epoch, test_loss, test_aux)
+
+                # Update tqdm postfix with current metrics
+                if tqdm is not None and isinstance(epoch_iter, tqdm):
+                    epoch_iter.set_postfix(
+                        train=f"{epoch_loss:.4f}",
+                        test=f"{float(test_loss):.4f}",
+                        best=f"{self.history.best_test_loss:.4f}",
+                    )
+
+                # Print progress (fallback when tqdm not available)
+                if tqdm is None and epoch % self.config.print_every == 0:
+                    print(
+                        f"Epoch {epoch:4d}/{self.config.epochs} | "
+                        f"Train: {epoch_loss:.6f} (R:{epoch_recon:.4f} KL:{epoch_kl:.4f} MMD:{epoch_mmd:.4f}) | "
+                        f"Test: {test_loss:.6f} (R:{test_aux['recon']:.4f}) | "
+                        f"Best: {self.history.best_test_loss:.6f}"
+                    )
+
+            elif test_loader is None:
+                # No validation -- update progress with train-only metrics
+                if tqdm is not None and isinstance(epoch_iter, tqdm):
+                    epoch_iter.set_postfix(train=f"{epoch_loss:.4f}")
+
+                if tqdm is None and epoch % self.config.print_every == 0:
+                    print(
+                        f"Epoch {epoch:4d}/{self.config.epochs} | "
+                        f"Train: {epoch_loss:.6f}"
+                    )
+
+            # Call on_epoch_end callback
+            if self.on_epoch_end is not None:
+                self.on_epoch_end(self.model, self.history, epoch)
+
+        return self.model, self.history
 
     def _evaluate(
         self,
