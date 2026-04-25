@@ -1,0 +1,48 @@
+{
+  "platform": {
+    "platform": "gpu",
+    "device_kind": "NVIDIA A100-SXM4-40GB",
+    "hostname": "nid001229",
+    "python_version": "3.11.15",
+    "jax_version": "0.9.1",
+    "n_devices": 4
+  },
+  "results": [
+    {
+      "operation": "Broadband MLP (10000 rows)",
+      "first_ms": 693.5199749423191,
+      "avg_ms": 0.15316296718083322,
+      "n_repeats": 100
+    },
+    {
+      "operation": "VAE encode+decode (10000)",
+      "first_ms": 5853.435945929959,
+      "avg_ms": 11.079715564846992,
+      "n_repeats": 100
+    },
+    {
+      "operation": "LDM dark (10000, deterministic)",
+      "first_ms": 80943.96408798639,
+      "avg_ms": 1043.7946427846327,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM dark (10000, stochastic)",
+      "first_ms": 5983.815647079609,
+      "avg_ms": 1045.7386485068128,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM moon (10000, deterministic)",
+      "first_ms": 5454.49830906,
+      "avg_ms": 1043.5508817085065,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM twilight (10000, deterministic)",
+      "first_ms": 5647.0588179072365,
+      "avg_ms": 1042.4470253055915,
+      "n_repeats": 10
+    }
+  ]
+}
