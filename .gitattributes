@@ -1,0 +1,4 @@
+# Treat notebook directories as documentation so they don't dominate
+# GitHub's language stats (embedded base64 figure outputs inflate byte counts).
+examples/* linguist-documentation
+notebooks/* linguist-documentation
