@@ -1,0 +1,48 @@
+{
+  "platform": {
+    "platform": "cpu",
+    "device_kind": "cpu",
+    "hostname": "nid004165",
+    "python_version": "3.11.15",
+    "jax_version": "0.9.1",
+    "n_devices": 1
+  },
+  "results": [
+    {
+      "operation": "Broadband MLP (1000 rows)",
+      "first_ms": 85.00761599998441,
+      "avg_ms": 0.9703832600143869,
+      "n_repeats": 100
+    },
+    {
+      "operation": "VAE encode+decode (1000)",
+      "first_ms": 834.0549640001882,
+      "avg_ms": 53.43990165002651,
+      "n_repeats": 100
+    },
+    {
+      "operation": "LDM dark (100, deterministic)",
+      "first_ms": 4380.251544000203,
+      "avg_ms": 1928.8335272000495,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM dark (100, stochastic)",
+      "first_ms": 3676.01908000006,
+      "avg_ms": 1844.856417399933,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM moon (100, deterministic)",
+      "first_ms": 3722.55895599983,
+      "avg_ms": 2162.666239599912,
+      "n_repeats": 10
+    },
+    {
+      "operation": "LDM twilight (100, deterministic)",
+      "first_ms": 4056.4295149997633,
+      "avg_ms": 2387.139213500086,
+      "n_repeats": 10
+    }
+  ]
+}

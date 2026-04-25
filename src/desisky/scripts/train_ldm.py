@@ -291,9 +291,10 @@ def main():
                     sys.exit("--flux-path is required when --data-path is .csv")
                 metadata = pd.read_csv(p)
                 flux = np.load(args.flux_path)
-                # Use DESI wavelength grid
+                # Only need wavelength grid — skip filter (applied below)
                 from desisky.data import SkySpecVAC
-                wavelength, _, _ = SkySpecVAC(version="v1.0", download=True).load()
+                wavelength, _, _ = SkySpecVAC(version="v1.0", download=True,
+                                              exclude_known_bad=False).load()
 
             # Apply variant-specific filter
             variant_mask = VARIANT_FILTERS[variant](metadata)

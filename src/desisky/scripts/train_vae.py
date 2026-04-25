@@ -182,15 +182,14 @@ def main():
     print("\n[1/5] Loading sky spectra...")
     from desisky.data import SkySpecVAC
     quality_filter = not args.no_quality_filter
-    vac = SkySpecVAC(version="v1.0", download=True,
-                     exclude_known_bad=quality_filter)
 
     if args.data_path:
         data = np.load(args.data_path)
         flux = data["flux"]
         metadata = None
-        # DESI wavelength grid for wandb CDF visualizations
-        wavelength, _, _ = vac.load()
+        # Only need wavelength grid — skip filter (user data should be pre-filtered)
+        wavelength, _, _ = SkySpecVAC(version="v1.0", download=True,
+                                      exclude_known_bad=False).load()
         if quality_filter:
             import warnings
             warnings.warn(
@@ -201,6 +200,8 @@ def main():
             )
         print(f"  Loaded user data: {flux.shape[0]:,} spectra from {args.data_path}")
     else:
+        vac = SkySpecVAC(version="v1.0", download=True,
+                         exclude_known_bad=quality_filter)
         wavelength, flux, metadata = vac.load()
         print(f"  Loaded {len(metadata):,} spectra from DESI SkySpecVAC")
 

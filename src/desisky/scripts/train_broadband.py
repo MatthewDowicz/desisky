@@ -201,7 +201,6 @@ def main():
     if args.wandb:
         from desisky.training import WandbConfig
         from desisky.training.wandb_utils import log_figure
-        from desisky.training.dataset import gather_full_data
         import matplotlib.pyplot as plt
 
         wandb_config = WandbConfig(
@@ -215,8 +214,18 @@ def main():
         )
 
         # Gather full train/test data for visualization
-        X_train, y_train, _, _ = gather_full_data(train_loader)
-        X_test, y_test, _, _ = gather_full_data(test_loader)
+        if args.data_path:
+            # User data: split arrays by the same indices used for train/test split
+            train_indices = train_set.indices
+            test_indices = test_set.indices
+            X_train = inputs[train_indices]
+            y_train = targets[train_indices]
+            X_test = inputs[test_indices]
+            y_test = targets[test_indices]
+        else:
+            from desisky.training.dataset import gather_full_data
+            X_train, y_train, _, _ = gather_full_data(train_loader)
+            X_test, y_test, _, _ = gather_full_data(test_loader)
 
         # Scalar metrics (train/loss, val/loss) are logged by the
         # BroadbandTrainer._train_loop(). This callback only does visualizations.

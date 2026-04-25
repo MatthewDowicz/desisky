@@ -92,6 +92,40 @@ pip cache purge
 rm -rf ~/.cache/huggingface
 ```
 
+## Training on Perlmutter
+
+Perlmutter A100s have a CUDA graph capture bug that affects JAX training loops. The workaround depends on the model:
+
+### LDM and Broadband Training
+
+These work with the standard CLI — just disable the XLA autotuner:
+
+```bash
+export XLA_FLAGS="--xla_gpu_autotune_level=0"
+
+desisky-train-ldm --variant dark --epochs 100 --wandb
+desisky-train-broadband --epochs 500
+```
+
+### VAE Training
+
+The VAE's larger computation graph triggers a more severe form of the CUDA graph bug that requires a dedicated NERSC training script. This script has the same features as `desisky-train-vae` (wandb visualizations, loss component tracking, checkpoint saving, custom data paths, etc.) but uses `jax.lax.dynamic_slice` for batching inside the JIT'd function:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 XLA_FLAGS="--xla_gpu_autotune_level=0" \
+    python scripts/nersc_train_vae.py --epochs 100
+
+# With wandb
+CUDA_VISIBLE_DEVICES=0 XLA_FLAGS="--xla_gpu_autotune_level=0" \
+    python scripts/nersc_train_vae.py --epochs 100 --wandb --wandb-project desisky-vae
+
+# With custom data
+CUDA_VISIBLE_DEVICES=0 XLA_FLAGS="--xla_gpu_autotune_level=0" \
+    python scripts/nersc_train_vae.py --epochs 100 --data-path my_spectra.npz
+```
+
+Run `python scripts/nersc_train_vae.py --help` for all available options.
+
 ## CPU vs GPU Performance
 
 See [BENCHMARKS.md](BENCHMARKS.md) for full results. Key numbers:
