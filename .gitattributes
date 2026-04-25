@@ -1,0 +1,4 @@
+# Treat the analysis/presentation notebooks as documentation so they don't
+# dominate GitHub's language stats (the embedded base64 figure outputs in
+# the presentation notebook alone are ~12 MB).
+notebooks/* linguist-documentation
