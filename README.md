@@ -536,6 +536,8 @@ For running on NERSC Perlmutter with GPU support, see [`docs/NERSC_SETUP.md`](do
 | [specsim_polar_comparison.ipynb](notebooks/specsim_polar_comparison.ipynb) | Side-by-side comparison of desisky vs specsim sky predictions in polar coordinates |
 | [desi_data_pres.ipynb](notebooks/desi_data_pres.ipynb) | Companion notebook for the DESI data systems presentation (slide figures, validation plots) |
 
+Some notebooks require packages beyond `desisky[all]` (e.g. `specsim`) — install via `pip install -r notebooks/requirements.txt`.
+
 ## Project Structure
 
 ```
