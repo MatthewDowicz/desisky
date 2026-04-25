@@ -1,0 +1,6 @@
+# Extra dependencies for notebooks in this directory that aren't covered by
+# `pip install desisky[all]`. Install with:
+#     pip install -r notebooks/requirements.txt
+
+# Required by specsim_polar_comparison.ipynb (KS91 moonlight comparison)
+specsim

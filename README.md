@@ -514,6 +514,8 @@ For running on NERSC Perlmutter with GPU support, see [`docs/NERSC_SETUP.md`](do
 
 ## Examples
 
+### User-facing tutorials (`examples/`)
+
 | Notebook | Description |
 |----------|-------------|
 | [00_tutorial.ipynb](examples/00_tutorial.ipynb) | **Start here** -- End-to-end walkthrough of every major capability |
@@ -525,6 +527,16 @@ For running on NERSC Perlmutter with GPU support, see [`docs/NERSC_SETUP.md`](do
 | [06_ldm_training.ipynb](examples/06_ldm_training.ipynb) | Train LDM from scratch with EDM framework and EMA |
 | [07_vae_wandb_training.ipynb](examples/07_vae_wandb_training.ipynb) | VAE + W&B: reconstruction plots, latent corners, sweeps |
 | [08_ldm_wandb_training.ipynb](examples/08_ldm_wandb_training.ipynb) | LDM + W&B: CDF comparisons, validation grids, sweeps |
+
+### Analysis & research notebooks (`notebooks/`)
+
+| Notebook | Description |
+|----------|-------------|
+| [investigate_outlier_spectra.ipynb](notebooks/investigate_outlier_spectra.ipynb) | Investigation of anomalous LDM-generated spectra (dark samples looking moon-like, twilight outliers) |
+| [specsim_polar_comparison.ipynb](notebooks/specsim_polar_comparison.ipynb) | Side-by-side comparison of desisky vs specsim sky predictions in polar coordinates |
+| [desi_data_pres.ipynb](notebooks/desi_data_pres.ipynb) | Companion notebook for the DESI data systems presentation (slide figures, validation plots) |
+
+Some notebooks require packages beyond `desisky[all]` (e.g. `specsim`) — install via `pip install -r notebooks/requirements.txt`.
 
 ## Project Structure
 
@@ -564,10 +576,16 @@ desisky/
 │       ├── infer_broadband.py  #   desisky-infer-broadband
 │       ├── infer_vae.py        #   desisky-infer-vae
 │       └── infer_ldm.py        #   desisky-infer-ldm
-├── tests/                      # 361 unit tests
-├── examples/                   # 9 Jupyter notebooks
+├── tests/                      # 382 unit tests
+├── examples/                   # 9 user-facing tutorial notebooks
+├── notebooks/                  # Analysis & presentation notebooks
+├── scripts/                    # Standalone scripts (NERSC VAE training, data prep)
+├── jobs/                       # SLURM job scripts for NERSC training
+├── benchmarks/                 # Inference/training timing benchmarks
 ├── docs/
-│   └── CLI_GUIDE.md            # CLI data formats, output formats, wandb reference
+│   ├── CLI_GUIDE.md            # CLI data formats, output formats, wandb reference
+│   ├── BENCHMARKS.md           # Cross-platform timing results (Entropy + NERSC Perlmutter)
+│   └── NERSC_SETUP.md          # NERSC environment setup and GPU training recipes
 ├── pyproject.toml
 ├── CHANGELOG.md
 └── LICENSE.txt

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **NERSC Perlmutter A100 training support** — enables VAE, LDM, and broadband training on Perlmutter
+  - `scripts/nersc_train_vae.py` — standalone VAE training script with `jax.lax.dynamic_slice` workaround for a CUDA graph capture bug on Perlmutter A100s
+  - `scripts/prepare_training_data.py` — reproducible data prep for training (quality filters + metadata enrichment: `ECLIPSE_FRAC`, `SOLFLUX`, galactic/ecliptic coords, broadband aliases)
+  - `jobs/` — SLURM job scripts for VAE, LDM (dark/moon/twilight), and broadband training on NERSC
+  - `docs/NERSC_SETUP.md` — training section documenting required XLA flags (`--xla_gpu_autotune_level=0`) and when the NERSC VAE script is needed
+- **Perlmutter benchmark results** in `docs/BENCHMARKS.md` — CPU and A100 GPU timings at default and 10K sample sizes
+- **Analysis & research notebooks** in a new `notebooks/` directory (separate from `examples/`, which hosts user-facing tutorials):
+  - `notebooks/investigate_outlier_spectra.ipynb` — investigation of anomalous LDM-generated spectra
+  - `notebooks/specsim_polar_comparison.ipynb` — desisky vs specsim polar comparison
+  - `notebooks/desi_data_pres.ipynb` — DESI data systems presentation companion
+
+### Fixed
+
+- Broadband `--data-path` + `--wandb` compatibility — `gather_full_data` previously assumed `SkyBrightnessDataset` internals; now works with `TensorDataset` loaded from user data paths
+- Broadband `_save_checkpoint` — added fallback for datasets without `.metadata` (e.g. `TensorDataset` from `--data-path`)
+- Duplicate quality filter messages when loading the DESI wavelength grid
+
 ## [0.8.0] - 2026-03-18
 
 ### Added
