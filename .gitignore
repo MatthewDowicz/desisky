@@ -104,3 +104,11 @@ src/desisky/data/solarflux-2004-2025.csv
 
 # Developer notes
 research.md
+plan*.md
+presentation*.md
+
+# Local training data (large; built by scripts/prepare_training_data.py)
+training_data/
+
+# Scratch notebook at repo root
+0_createVACdata.ipynb
