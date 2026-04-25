@@ -112,3 +112,9 @@ training_data/
 
 # Scratch notebook at repo root
 0_createVACdata.ipynb
+
+# Regenerable figure outputs from analysis/presentation notebooks
+examples/fig_*.png
+examples/slide_*.png
+examples/polar_*.png
+notebooks/*.png
