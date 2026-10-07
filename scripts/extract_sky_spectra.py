@@ -3,18 +3,21 @@
 reduction (loa, jura, iron, ...) into monthly FITS files.
 
 Script form of the sky-extraction cells in GetData.ipynb / 0_createVACdata.ipynb
-(``load_sky_single`` adapted from desispec.skymag.compute_skymag), parallelised
-over months.  Compared with the notebook: month tables are reset_index'ed before
-NSKY is assigned (the notebook's ``table.loc[idx]`` wrote to the wrong rows),
-all inputs are passed to workers explicitly (Python 3.14 defaults to
-forkserver), and output files are written atomically so a resubmitted job
-skips finished months.
+(``load_sky_single`` adapted from desispec.skymag.compute_skymag).  Exposures
+are farmed out to a process pool; results come back in order and each month is
+written (atomically) as soon as its last exposure arrives, so a resubmitted job
+skips finished months.  With 128 workers the full loa set (20,196 exposures,
+~3 s each) takes ~10-15 min, which fits the NERSC debug QOS.
+
+Compared with the notebook: month tables are reset_index'ed before NSKY is
+assigned (the notebook's ``table.loc[idx]`` wrote to the wrong rows), and all
+inputs are passed to workers explicitly (Python 3.14 defaults to forkserver).
 
 Run inside the DESI software environment, NOT the desisky conda env (needs
 desispec)::
 
     source /global/common/software/desi/desi_environment.sh main
-    python scripts/extract_sky_spectra.py --release loa --nproc 32
+    python scripts/extract_sky_spectra.py --release loa --nproc 128
 
 or submit ``sbatch jobs/extract_sky_spectra.sh loa``.
 
@@ -22,7 +25,9 @@ Outputs (under --outdir, default skydata_<release>/)::
 
     sky-meta-<release>.csv      exposure table for --start..--stop plus
                                 MOONFRAC MOONALT MOONSEP SUNALT SUNSEP OBSALT OBSAZ
-    YYYY/MM/sky-YYYY-MM.fits    META: that month's rows + NSKY (petals averaged)
+    YYYY/MM/sky-YYYY-MM.fits    META: that month's rows + NSKY
+                                      (petals averaged; 0 = no usable sky files,
+                                       -1 = exception while reading)
                                 FLUX: (n_exp, 7781) float32,
                                       erg/s/cm2/A/arcsec2 (NOT scaled by 1e17)
 
@@ -31,7 +36,7 @@ Then stack with ``scripts/stack_sky_spectra.py --release <release>``.
 Smoke test (3 exposures of one month into a scratch directory)::
 
     python scripts/extract_sky_spectra.py --release loa --months 2021-01 \
-        --limit 3 --nproc 1 --outdir /tmp/skytest
+        --limit 3 --nproc 2 --outdir /tmp/skytest
 """
 from __future__ import annotations
 
@@ -172,6 +177,17 @@ def load_sky_single(night: int, expid: int, release_dir: str):
     return nsky, np.mean(spectra, axis=0)
 
 
+def extract_one(task):
+    """Worker: (night, expid, release_dir) -> (nsky, sky as float32)."""
+    night, expid, release_dir = task
+    try:
+        nsky, sky = load_sky_single(int(night), int(expid), release_dir)
+    except Exception as exc:  # keep going; flagged with NSKY = -1
+        print(f"FAILED {night} {expid}: {exc!r}", flush=True)
+        return -1, np.zeros(FULLWAVE.shape, np.float32)
+    return nsky, sky.astype(np.float32)
+
+
 def df_to_records(df: pd.DataFrame) -> np.ndarray:
     """DataFrame -> structured array fitsio can write (strings as fixed-width bytes)."""
     cols = {}
@@ -192,32 +208,9 @@ def df_to_records(df: pd.DataFrame) -> np.ndarray:
     return rec
 
 
-def extract_month(task) -> str:
-    year, month, table, outdir, release_dir, limit = task
-    tag = f"{year}-{month:02d}"
-    outfile = pathlib.Path(outdir) / f"{year}" / f"{month:02d}" / f"sky-{tag}.fits"
-    if outfile.exists():
-        return f"[{tag}] exists, skipped"
-    if limit:
-        table = table.iloc[:limit]
-    n = len(table)
+def write_month(outfile: pathlib.Path, table: pd.DataFrame, nsky: np.ndarray, flux: np.ndarray) -> None:
+    """Write META + FLUX to a .part file, then rename, so partial files never look finished."""
     outfile.parent.mkdir(parents=True, exist_ok=True)
-
-    nsky = np.zeros(n, np.int32)
-    flux = np.zeros((n, FULLWAVE.size), np.float32)
-    t0 = time.time()
-    nfail = 0
-    nights = table["NIGHT"].to_numpy()
-    expids = table["EXPID"].to_numpy()
-    for i in range(n):
-        try:
-            nsky[i], flux[i] = load_sky_single(int(nights[i]), int(expids[i]), release_dir)
-        except Exception as exc:  # keep going; row stays NSKY=0 / zeros
-            nfail += 1
-            print(f"[{tag}] FAILED {nights[i]} {expids[i]}: {exc!r}", flush=True)
-        if (i + 1) % 50 == 0 or i + 1 == n:
-            print(f"[{tag}] {i + 1}/{n} exposures, {time.time() - t0:.0f}s", flush=True)
-
     table = table.copy()
     table["NSKY"] = nsky
     part = outfile.with_name(outfile.stem + ".part.fits")
@@ -225,8 +218,6 @@ def extract_month(task) -> str:
         fits.write(df_to_records(table), extname="META")
         fits.write(flux, extname="FLUX")
     part.rename(outfile)
-    return (f"[{tag}] done: {n} exposures, {int((nsky > 0).sum())} with sky, "
-            f"{nfail} failed, {time.time() - t0:.0f}s")
 
 
 # ---------------------------------------------------------------- driver
@@ -241,7 +232,8 @@ def main():
     p.add_argument("--stop", type=int, default=None,
                    help="last NIGHT to include (default: everything in the release)")
     p.add_argument("--outdir", default=None, help="output directory (default: skydata_<release>)")
-    p.add_argument("--nproc", type=int, default=32)
+    p.add_argument("--nproc", type=int, default=128, help="worker processes")
+    p.add_argument("--chunksize", type=int, default=4, help="exposures per worker task")
     p.add_argument("--months", nargs="*", metavar="YYYY-MM", help="only these months")
     p.add_argument("--limit", type=int, default=0, help="max exposures per month (smoke tests)")
     args = p.parse_args()
@@ -265,25 +257,52 @@ def main():
         daily.to_csv(meta_csv, index=False)
         print(f"  wrote {meta_csv}", flush=True)
 
-    tasks = []
+    # One entry per month still to do: (tag, outfile, table). Months whose file exists are skipped.
+    months, tasks, nskip = [], [], 0
     for (year, month), tbl in daily.groupby([daily["NIGHT"] // 10000, daily["NIGHT"] // 100 % 100]):
-        tag = f"{int(year)}-{int(month):02d}"
+        year, month = int(year), int(month)
+        tag = f"{year}-{month:02d}"
         if args.months and tag not in args.months:
             continue
-        tasks.append((int(year), int(month), tbl.reset_index(drop=True),
-                      str(outdir), str(release_dir), args.limit))
-    nexp = sum(min(len(t[2]), args.limit) if args.limit else len(t[2]) for t in tasks)
-    print(f"{len(tasks)} months, {nexp} exposures, {args.nproc} process(es) -> {outdir}/", flush=True)
+        outfile = outdir / f"{year}" / f"{month:02d}" / f"sky-{tag}.fits"
+        if outfile.exists():
+            nskip += 1
+            continue
+        tbl = tbl.reset_index(drop=True)
+        if args.limit:
+            tbl = tbl.iloc[:args.limit]
+        months.append((tag, outfile, tbl))
+        tasks += [(int(n), int(e), str(release_dir)) for n, e in zip(tbl["NIGHT"], tbl["EXPID"])]
+    print(f"{len(months)} months to do ({nskip} already done), {len(tasks)} exposures, "
+          f"{args.nproc} worker(s) -> {outdir}/", flush=True)
+    if not tasks:
+        return
 
     t0 = time.time()
-    if args.nproc <= 1:
-        for task in tasks:
-            print(extract_month(task), flush=True)
-    else:
-        with mp.get_context("fork").Pool(args.nproc) as pool:
-            for msg in pool.imap_unordered(extract_month, tasks):
-                print(msg, flush=True)
-    print(f"All done in {(time.time() - t0) / 60:.1f} min", flush=True)
+    ctx = mp.get_context("fork")
+    pool = ctx.Pool(args.nproc) if args.nproc > 1 else None
+    results = pool.imap(extract_one, tasks, chunksize=args.chunksize) if pool else map(extract_one, tasks)
+    ndone = 0
+    try:
+        for tag, outfile, tbl in months:          # results arrive in task order = month order
+            n = len(tbl)
+            nsky = np.zeros(n, np.int32)
+            flux = np.zeros((n, FULLWAVE.size), np.float32)
+            for i in range(n):
+                nsky[i], flux[i] = next(results)
+                ndone += 1
+                if ndone % 500 == 0:
+                    rate = ndone / (time.time() - t0)
+                    print(f"  {ndone}/{len(tasks)} exposures, {time.time() - t0:.0f}s, "
+                          f"ETA {(len(tasks) - ndone) / rate / 60:.1f} min", flush=True)
+            write_month(outfile, tbl, nsky, flux)
+            print(f"[{tag}] done: {n} exposures, {int((nsky > 0).sum())} with sky, "
+                  f"{int((nsky < 0).sum())} failed, {time.time() - t0:.0f}s elapsed", flush=True)
+    finally:
+        if pool:
+            pool.close()
+            pool.join()
+    print(f"All done: {ndone} exposures in {(time.time() - t0) / 60:.1f} min", flush=True)
 
 
 if __name__ == "__main__":
