@@ -316,6 +316,77 @@ def test_trainer_train_smoke(mock_metadata, mock_flux, input_features, mock_mode
     assert checkpoint_path.exists()
 
 
+def test_trainer_checkpoint_records_validation_split(
+    mock_metadata, mock_flux, input_features, mock_model, tmp_path
+):
+    """seed, val_split and val_expids are written to the checkpoint metadata."""
+    from desisky.io import load
+    from desisky.models.broadband import make_broadbandMLP
+    from desisky.data import get_validation_mask
+
+    metadata = mock_metadata.copy()
+    metadata["EXPID"] = np.arange(1000, 1000 + len(metadata))
+    dataset = SkyBrightnessDataset(metadata, mock_flux, input_features)
+    train_set, test_set = random_split(
+        dataset, [70, 30], generator=torch.Generator().manual_seed(42)
+    )
+    val_expids = metadata["EXPID"].iloc[list(test_set.indices)].tolist()
+
+    config = TrainingConfig(
+        epochs=1,
+        learning_rate=1e-3,
+        save_best=True,
+        save_dir=tmp_path,
+        run_name="split_model",
+        print_every=1,
+        seed=42,
+        val_split=0.3,
+        val_expids=val_expids,
+    )
+    trainer = BroadbandTrainer(mock_model, config)
+    trainer.train(
+        NumpyLoader(train_set, batch_size=16, shuffle=True),
+        NumpyLoader(test_set, batch_size=16, shuffle=False),
+    )
+
+    _, meta = load(tmp_path / "split_model.eqx", constructor=make_broadbandMLP)
+    assert meta["training"]["config"]["seed"] == 42
+    assert meta["training"]["config"]["val_split"] == 0.3
+    assert len(meta["training"]["val_expids"]) == 30
+    assert sorted(meta["training"]["val_expids"]) == sorted(val_expids)
+
+    # The stored EXPIDs rebuild exactly the held-out rows via the shared helper
+    mask = get_validation_mask(metadata, meta)
+    assert mask.sum() == 30
+    assert set(metadata.loc[mask, "EXPID"]) == set(val_expids)
+
+
+def test_trainer_checkpoint_omits_val_expids_when_unset(
+    mock_metadata, mock_flux, input_features, mock_model, tmp_path
+):
+    """Without val_expids the key is absent, matching LDM checkpoint behaviour."""
+    from desisky.io import load
+    from desisky.models.broadband import make_broadbandMLP
+
+    dataset = SkyBrightnessDataset(mock_metadata, mock_flux, input_features)
+    train_set, test_set = random_split(
+        dataset, [70, 30], generator=torch.Generator().manual_seed(42)
+    )
+    config = TrainingConfig(
+        epochs=1, learning_rate=1e-3, save_best=True, save_dir=tmp_path,
+        run_name="nosplit_model", print_every=1,
+    )
+    BroadbandTrainer(mock_model, config).train(
+        NumpyLoader(train_set, batch_size=16, shuffle=True),
+        NumpyLoader(test_set, batch_size=16, shuffle=False),
+    )
+
+    _, meta = load(tmp_path / "nosplit_model.eqx", constructor=make_broadbandMLP)
+    assert "val_expids" not in meta["training"]
+    assert meta["training"]["config"]["seed"] is None
+    assert meta["training"]["config"]["val_split"] is None
+
+
 def test_trainer_extract_architecture(mock_model):
     """Test architecture extraction from MLP."""
     config = TrainingConfig(epochs=1, learning_rate=1e-3)

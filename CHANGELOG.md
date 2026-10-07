@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `scripts/extract_sky_spectra.py` — per-exposure, focal-plane-averaged sky spectra from `--release` (loa, jura, ...) into monthly FITS files, parallel over months and resumable; replaces the `GetData.ipynb` extraction cells
   - `scripts/stack_sky_spectra.py` — stacks the monthly files into the `full_sky_spec_<release>.{npy,csv}` pair consumed by `prepare_training_data.py`, dropping exposures with no usable petal and adding `SKY_MAG_V_SPEC`
   - `jobs/extract_sky_spectra.sh` — SLURM wrapper: `sbatch jobs/extract_sky_spectra.sh [release] [nproc]`
+- **Broadband checkpoints record their validation split** — `TrainingConfig` gained `seed`, `val_split`, and `val_expids`; `desisky-train-broadband` fills them in and they are written to the checkpoint metadata (`training.val_expids`, same location as LDM checkpoints), so the held-out set can be rebuilt with `get_validation_mask`
 
 ### Fixed
 

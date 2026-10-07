@@ -50,6 +50,17 @@ class TrainingConfig:
         Print training progress every N epochs.
     validate_every : int, default 1
         Compute validation metrics every N epochs.
+    seed : int | None, default None
+        Random seed used for the train/validation split. Recorded in the
+        checkpoint metadata for reproducibility.
+    val_split : float | None, default None
+        Fraction of the data held out for validation. Recorded in the
+        checkpoint metadata.
+    val_expids : list[int] | None, default None
+        EXPID values of the validation exposures. Stored under
+        ``meta["training"]["val_expids"]`` (same place as LDM checkpoints) so
+        the held-out set can be rebuilt with
+        :func:`desisky.data.get_validation_mask`.
 
     Examples
     --------
@@ -71,6 +82,9 @@ class TrainingConfig:
     run_name: str = "broadband_training"
     print_every: int = 50
     validate_every: int = 1
+    seed: Optional[int] = None
+    val_split: Optional[float] = None
+    val_expids: Optional[list] = None
 
 
 @dataclass
@@ -398,7 +412,13 @@ class BroadbandTrainer:
                     "learning_rate": self.config.learning_rate,
                     "loss": self.config.loss,
                     "huber_delta": self.config.huber_delta,
+                    "seed": self.config.seed,
+                    "val_split": self.config.val_split,
                 },
+                # Validation EXPIDs, in the same location as LDM checkpoints, so the
+                # held-out set can be rebuilt with desisky.data.get_validation_mask.
+                **({"val_expids": [int(e) for e in self.config.val_expids]}
+                   if self.config.val_expids is not None else {}),
             },
         }
 

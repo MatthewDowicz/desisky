@@ -166,6 +166,18 @@ def main():
     train_set, test_set = random_split(dataset, [train_size, test_size], generator=gen)
     print(f"  Train: {len(train_set):,} | Test: {len(test_set):,}")
 
+    # Record the validation EXPIDs in the checkpoint (as the LDM trainer does) so
+    # the held-out set can be rebuilt later with desisky.data.get_validation_mask.
+    # Subset.indices are positional, and both data paths keep metadata in dataset
+    # order, so .iloc is the right accessor.
+    val_expids = None
+    if "EXPID" in metadata.columns:
+        val_expids = metadata["EXPID"].iloc[list(test_set.indices)].astype(int).tolist()
+        print(f"  Storing {len(val_expids):,} validation EXPIDs in checkpoint metadata")
+    else:
+        print("  Warning: metadata has no EXPID column; the validation split will not "
+              "be recoverable from the checkpoint")
+
     # [3/5] Create DataLoaders
     print("\n[3/5] Creating data loaders...")
     train_loader = NumpyLoader(train_set, batch_size=args.batch_size, shuffle=True)
@@ -192,6 +204,9 @@ def main():
         run_name=args.run_name,
         print_every=args.print_every,
         validate_every=args.validate_every,
+        seed=args.seed,
+        val_split=args.val_split,
+        val_expids=val_expids,
     )
 
     # wandb setup
