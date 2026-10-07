@@ -118,3 +118,11 @@ examples/fig_*.png
 examples/slide_*.png
 examples/polar_*.png
 notebooks/*.png
+
+# Local model weights (backed up on CFS) and the original jura data notebook
+models/
+GetData.ipynb
+
+# Raw sky-spectra extraction outputs (scripts/extract_sky_spectra.py, stack_sky_spectra.py)
+skydata_*/
+full_sky_spec_*

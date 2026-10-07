@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Release-agnostic sky spectra extraction** for rebuilding the training set from a DESI spectro reduction on NERSC
+  - `scripts/extract_sky_spectra.py` — per-exposure, focal-plane-averaged sky spectra from `--release` (loa, jura, ...) into monthly FITS files, parallel over months and resumable; replaces the `GetData.ipynb` extraction cells
+  - `scripts/stack_sky_spectra.py` — stacks the monthly files into the `full_sky_spec_<release>.{npy,csv}` pair consumed by `prepare_training_data.py`, dropping exposures with no usable petal and adding `SKY_MAG_V_SPEC`
+  - `jobs/extract_sky_spectra.sh` — SLURM wrapper: `sbatch jobs/extract_sky_spectra.sh [release] [nproc]`
+
 ### Fixed
 
 - `SkySpecVAC` missing file error pointed to a non-existent `desisky-data fetch skyspec` command. Now gives the correct `desisky-data fetch --version ...`
