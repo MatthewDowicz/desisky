@@ -431,6 +431,53 @@ class TestVAETrainer:
             checkpoint_path = Path(tmpdir) / "test_vae.eqx"
             assert checkpoint_path.exists()
 
+    def test_checkpoint_records_validation_split(self, small_vae, train_test_loaders):
+        """val_split and val_expids are written to the checkpoint metadata."""
+        from desisky.io import load
+        import pandas as pd
+        from desisky.data import get_validation_mask
+
+        train_loader, test_loader = train_test_loaders
+        # Pretend EXPIDs 1150..1199 were the held-out rows of a 200-row table
+        metadata = pd.DataFrame({"EXPID": np.arange(1000, 1200)})
+        val_expids = metadata["EXPID"].iloc[150:].tolist()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = VAETrainingConfig(
+                epochs=2,
+                learning_rate=1e-3,
+                save_best=True,
+                save_dir=tmpdir,
+                run_name="split_vae",
+                val_split=0.25,
+                val_expids=val_expids,
+            )
+            VAETrainer(small_vae, config).train(train_loader, test_loader)
+
+            _, meta = load(Path(tmpdir) / "split_vae.eqx", constructor=make_SkyVAE)
+            assert meta["training"]["config"]["val_split"] == 0.25
+            assert meta["training"]["config"]["random_seed"] == 42
+            assert sorted(meta["training"]["val_expids"]) == sorted(val_expids)
+
+            mask = get_validation_mask(metadata, meta)
+            assert mask.sum() == 50
+            assert set(metadata.loc[mask, "EXPID"]) == set(val_expids)
+
+    def test_checkpoint_omits_val_expids_when_unset(self, small_vae, train_test_loaders):
+        """Without val_expids the key is absent, matching LDM checkpoint behaviour."""
+        from desisky.io import load
+
+        train_loader, test_loader = train_test_loaders
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = VAETrainingConfig(
+                epochs=2, learning_rate=1e-3, save_best=True,
+                save_dir=tmpdir, run_name="nosplit_vae",
+            )
+            VAETrainer(small_vae, config).train(train_loader, test_loader)
+            _, meta = load(Path(tmpdir) / "nosplit_vae.eqx", constructor=make_SkyVAE)
+            assert "val_expids" not in meta["training"]
+            assert meta["training"]["config"]["val_split"] is None
+
     def test_training_reproducibility(self, small_vae, train_test_loaders):
         """Test that training is reproducible with same seed."""
         train_loader, test_loader = train_test_loaders

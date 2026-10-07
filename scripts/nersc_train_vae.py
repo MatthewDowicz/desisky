@@ -210,6 +210,16 @@ def main():
     train_idx = perm[: len(flux) - n_test]
     test_idx = perm[len(flux) - n_test :]
 
+    # Record the held-out EXPIDs in the checkpoint (as the LDM trainer does) so the
+    # validation set can be rebuilt later with desisky.data.get_validation_mask.
+    val_expids = None
+    if metadata is not None and "EXPID" in metadata.columns:
+        val_expids = metadata["EXPID"].iloc[test_idx].astype(int).tolist()
+        print(f"  Storing {len(val_expids):,} validation EXPIDs in checkpoint metadata")
+    else:
+        print("  Warning: no metadata with EXPID; the validation split will not be "
+              "recoverable from the checkpoint")
+
     train_flux = flux[train_idx].astype(np.float32)
     test_flux = flux[test_idx].astype(np.float32)
     if test_conditions is not None:
@@ -337,6 +347,9 @@ def main():
                                 "learning_rate": args.learning_rate,
                                 "kernel_sigma": float(_ks),
                                 "seed": args.seed,
+                                "val_split": args.val_split,
+                                # same location as LDM / broadband checkpoints
+                                **({"val_expids": val_expids} if val_expids is not None else {}),
                             },
                         })
 

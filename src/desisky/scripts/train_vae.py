@@ -227,6 +227,16 @@ def main():
         test_conditions = test_conditions[test_idx]
     print(f"  Train: {n_train:,} | Test: {n_test:,}")
 
+    # Record the held-out EXPIDs in the checkpoint (as the LDM trainer does) so
+    # the validation set can be rebuilt later with desisky.data.get_validation_mask.
+    val_expids = None
+    if metadata is not None and "EXPID" in metadata.columns:
+        val_expids = metadata["EXPID"].iloc[test_idx].astype(int).tolist()
+        print(f"  Storing {len(val_expids):,} validation EXPIDs in checkpoint metadata")
+    else:
+        print("  Warning: no metadata with EXPID; the validation split will not be "
+              "recoverable from the checkpoint")
+
     # [3/5] Create DataLoaders
     # Use raw tensors (not TensorDataset) because VAETrainer iterates as
     # `for x in loader:` and expects plain arrays. TensorDataset wraps each
@@ -265,6 +275,8 @@ def main():
         print_every=args.print_every,
         validate_every=args.validate_every,
         random_seed=args.seed,
+        val_split=args.val_split,
+        val_expids=val_expids,
     )
 
     # wandb setup

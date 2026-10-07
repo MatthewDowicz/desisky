@@ -70,6 +70,14 @@ class VAETrainingConfig:
         Compute validation metrics every N epochs.
     random_seed : int, default 42
         Random seed for reproducible training.
+    val_split : float | None, default None
+        Fraction of the data held out for validation. Recorded in the
+        checkpoint metadata.
+    val_expids : list[int] | None, default None
+        EXPID values of the validation exposures. Stored under
+        ``meta["training"]["val_expids"]`` (same place as LDM and broadband
+        checkpoints) so the held-out set can be rebuilt with
+        :func:`desisky.data.get_validation_mask`.
 
     Examples
     --------
@@ -112,6 +120,8 @@ class VAETrainingConfig:
     print_every: int = 10
     validate_every: int = 1
     random_seed: int = 42
+    val_split: Optional[float] = None
+    val_expids: Optional[list] = None
 
 
 @dataclass
@@ -598,7 +608,14 @@ class VAETrainer:
                     "beta": self.config.beta,
                     "lam": self.config.lam,
                     "kernel_sigma": self.config.kernel_sigma,
+                    "random_seed": self.config.random_seed,
+                    "val_split": self.config.val_split,
                 },
+                # Validation EXPIDs, in the same location as LDM / broadband
+                # checkpoints, so the held-out set can be rebuilt with
+                # desisky.data.get_validation_mask.
+                **({"val_expids": [int(e) for e in self.config.val_expids]}
+                   if self.config.val_expids is not None else {}),
             },
         }
 
