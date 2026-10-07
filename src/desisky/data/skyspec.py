@@ -203,7 +203,7 @@ class SkySpecVAC:
             else:
                 raise FileNotFoundError(
                     f"{self.path} does not exist. Either call with download=True "
-                    f"or run the CLI: `desisky-data fetch skyspec --version {version}`"
+                    f"or run the CLI: `desisky-data fetch --version {version}`"
                 )
 
     def filepath(self) -> Path:
