@@ -66,6 +66,7 @@ config = LDMTrainingConfig(
     sigma_data=sigma_data,
     ema_decay=0.9999,
     early_stop_on_ema=True,
+    patience=3000,          # optional: stop after 3000 epochs without improvement
     conditioning_scaler=scaler,
 )
 

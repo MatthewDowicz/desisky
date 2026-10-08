@@ -556,3 +556,118 @@ class TestLDMTrainingIntegration:
             assert loaded_meta["training"]["epoch"] == 10
             assert loaded_meta["training"]["val_loss"] == 0.123
             assert loaded_meta["training"]["sigma_data"] == 1.0
+
+
+# ---------- Early Stopping Tests ----------
+
+
+class TestLDMEarlyStopping:
+    """Tests for LDMTrainingConfig.patience."""
+
+    @staticmethod
+    def _make_trainer(small_ldm, sigma_data, monkeypatch, val_losses, **cfg_kwargs):
+        """Build a trainer whose validation loss follows a fixed sequence.
+
+        ``_evaluate`` is replaced so the test is deterministic; EMA is disabled
+        so it is called exactly once per epoch.
+        """
+        config = LDMTrainingConfig(
+            epochs=len(val_losses),
+            learning_rate=1e-3,
+            meta_dim=4,
+            sigma_data=sigma_data,
+            ema_decay=0.0,
+            save_best=False,
+            **cfg_kwargs,
+        )
+        trainer = LatentDiffusionTrainer(small_ldm, config)
+        seq = iter(val_losses)
+        monkeypatch.setattr(trainer, "_evaluate", lambda *a, **k: next(seq))
+        return trainer
+
+    def test_patience_must_be_positive(self, sigma_data):
+        with pytest.raises(ValueError, match="patience"):
+            LDMTrainingConfig(
+                epochs=1, learning_rate=1e-3, meta_dim=4,
+                sigma_data=sigma_data, patience=0,
+            )
+
+    def test_patience_stops_training_early(
+        self, small_ldm, train_val_loaders, sigma_data, monkeypatch
+    ):
+        train_loader, val_loader = train_val_loaders
+        # Best at epoch 1; no improvement afterwards -> stop at epoch 3
+        val_losses = [1.0, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1]
+        trainer = self._make_trainer(
+            small_ldm, sigma_data, monkeypatch, val_losses, patience=2
+        )
+
+        _, _, history = trainer.train(train_loader, val_loader)
+
+        assert history.stopped_early is True
+        assert history.best_epoch == 1
+        assert history.best_val_loss == 0.5
+        assert len(history.train_losses) == 4   # epochs 0..3
+        assert len(history.val_losses) == 4
+
+    def test_patience_resets_on_improvement(
+        self, small_ldm, train_val_loaders, sigma_data, monkeypatch
+    ):
+        train_loader, val_loader = train_val_loaders
+        # Improvements at epochs 0, 2, 4 keep the counter below patience=2
+        # until the tail of flat epochs; stop at epoch 6.
+        val_losses = [1.0, 1.1, 0.9, 1.0, 0.8, 0.9, 0.9, 0.9]
+        trainer = self._make_trainer(
+            small_ldm, sigma_data, monkeypatch, val_losses, patience=2
+        )
+
+        _, _, history = trainer.train(train_loader, val_loader)
+
+        assert history.stopped_early is True
+        assert history.best_epoch == 4
+        assert len(history.train_losses) == 7   # epochs 0..6
+
+    def test_no_patience_runs_all_epochs(
+        self, small_ldm, train_val_loaders, sigma_data, monkeypatch
+    ):
+        train_loader, val_loader = train_val_loaders
+        val_losses = [1.0, 0.5, 0.6, 0.7, 0.8]
+        trainer = self._make_trainer(small_ldm, sigma_data, monkeypatch, val_losses)
+
+        _, _, history = trainer.train(train_loader, val_loader)
+
+        assert history.stopped_early is False
+        assert len(history.train_losses) == len(val_losses)
+
+    def test_patience_ignored_without_validation(
+        self, small_ldm, train_val_loaders, sigma_data, monkeypatch
+    ):
+        train_loader, _ = train_val_loaders
+        trainer = self._make_trainer(
+            small_ldm, sigma_data, monkeypatch, [None] * 3, patience=1
+        )
+
+        _, _, history = trainer.train(train_loader, val_loader=None)
+
+        assert history.stopped_early is False
+        assert len(history.train_losses) == 3
+
+    def test_patience_recorded_in_checkpoint(
+        self, small_ldm, train_val_loaders, sigma_data
+    ):
+        from desisky.io import load
+
+        train_loader, val_loader = train_val_loaders
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = LDMTrainingConfig(
+                epochs=1, learning_rate=1e-3, meta_dim=4,
+                sigma_data=sigma_data, ema_decay=0.0, patience=50,
+                save_best=True, save_dir=tmpdir, run_name="ldm_patience_test",
+            )
+            trainer = LatentDiffusionTrainer(small_ldm, config)
+            trainer.train(train_loader, val_loader)
+
+            _, meta = load(
+                Path(tmpdir) / "ldm_patience_test.eqx", constructor=make_UNet1D_cond
+            )
+            assert meta["training"]["config"]["patience"] == 50

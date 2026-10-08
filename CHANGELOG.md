@@ -13,7 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `scripts/extract_sky_spectra.py` — per-exposure, focal-plane-averaged sky spectra from `--release` (loa, jura, ...) into monthly FITS files, parallel over months and resumable; replaces the `GetData.ipynb` extraction cells
   - `scripts/stack_sky_spectra.py` — stacks the monthly files into the `full_sky_spec_<release>.{npy,csv}` pair consumed by `prepare_training_data.py`, dropping exposures with no usable petal and adding `SKY_MAG_V_SPEC`
   - `jobs/extract_sky_spectra.sh` — SLURM wrapper: `sbatch jobs/extract_sky_spectra.sh [release] [nproc]`
+- **Early stopping for LDM training** — `LDMTrainingConfig.patience` / `desisky-train-ldm --patience N` ends training once the gated validation loss has not improved for N epochs. `LDMTrainingHistory.stopped_early` records whether it fired and `patience` is written to the checkpoint's `training.config`. The NERSC LDM job scripts use `--patience 3000` (the loa runs found their best EMA model by epoch 2100-3300 of a 5k-25k budget; the dark run then spent 10 h past its minimum before the 12 h limit)
 - **Broadband and VAE checkpoints record their validation split** — `TrainingConfig` gained `seed`, `val_split`, and `val_expids`, `VAETrainingConfig` gained `val_split` and `val_expids`; `desisky-train-broadband`, `desisky-train-vae`, and `scripts/nersc_train_vae.py` fill them in and write them to the checkpoint metadata (`training.val_expids`, same location as LDM checkpoints), so every model's held-out set can be rebuilt with `get_validation_mask`
+
+### Changed
+
+- `jobs/train_ldm_{dark,moon,twilight}.sh` point at the loa-trained VAE (`models/laced-dew-35.eqx`) and pass `--patience 3000`; the dark job's time limit is 24 h
 
 ### Fixed
 

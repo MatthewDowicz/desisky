@@ -103,6 +103,7 @@ config = LDMTrainingConfig(
     dropout_p=0.1,               # CFG conditioning dropout
     ema_decay=0.9999,
     early_stop_on_ema=True,
+    patience=3000,               # Stop after 3000 epochs without improvement
     conditioning_scaler=scaler,  # Saved in checkpoint for inference
     run_name="ldm_dark",
 )
@@ -190,7 +191,11 @@ theta_ema = decay * theta_ema + (1 - decay) * theta
 
 With `decay = 0.9999`, the EMA model averages over ~10,000 gradient steps. The EMA model typically produces higher quality samples and is the model used for inference.
 
-When `early_stop_on_ema=True` (default), validation loss is computed on the EMA model and used for early stopping / best-model checkpointing.
+When `early_stop_on_ema=True` (default), validation loss is computed on the EMA model and used for best-model checkpointing and early stopping.
+
+### Early Stopping
+
+By default training runs for the full `epochs`, saving a checkpoint whenever the gated validation loss improves. Set `patience=N` to stop once that loss has not improved for `N` consecutive epochs; `history.stopped_early` records whether this happened and `len(history.train_losses)` is the number of epochs actually run. The best checkpoint is unaffected either way, so `epochs` becomes an upper bound rather than a fixed budget. From the CLI, pass `--patience N` to `desisky-train-ldm`.
 
 ## Training Configuration
 
@@ -210,6 +215,7 @@ config = LDMTrainingConfig(
     # EMA
     ema_decay=0.9999,            # EMA smoothing factor (0.0 to disable)
     early_stop_on_ema=True,      # Gate early stopping on EMA val loss
+    patience=None,               # Stop after N epochs w/o improvement (None = never)
 
     # Checkpointing
     save_best=True,

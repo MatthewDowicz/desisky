@@ -186,6 +186,10 @@ def parse_args():
     parser.add_argument("--ema-decay", type=float, default=0.9999)
     parser.add_argument("--val-split", type=float, default=0.1)
     parser.add_argument("--validate-every", type=int, default=1)
+    parser.add_argument("--patience", type=int, default=None,
+                        help="Stop training after this many epochs without "
+                             "improvement in validation loss (default: train "
+                             "for all --epochs)")
     # Models
     parser.add_argument("--vae-path", type=str, default=None,
                         help="Path to custom VAE checkpoint (default: builtin)")
@@ -430,6 +434,7 @@ def main():
         random_seed=args.seed,
         print_every=args.print_every,
         validate_every=args.validate_every,
+        patience=args.patience,
         conditioning_scaler=scaler,
     )
 
@@ -468,7 +473,11 @@ def main():
     )
     trained_model, ema_model, history = trainer.train(train_loader, val_loader)
 
-    print(f"\nBest val loss: {history.best_val_loss:.6f} (epoch {history.best_epoch})")
+    n_run = len(history.train_losses)
+    if history.stopped_early:
+        print(f"\nStopped early after {n_run} of {args.epochs} epochs "
+              f"(patience={args.patience})")
+    print(f"Best val loss: {history.best_val_loss:.6f} (epoch {history.best_epoch})")
 
 
 if __name__ == "__main__":

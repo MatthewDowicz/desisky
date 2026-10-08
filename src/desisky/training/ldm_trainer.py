@@ -342,6 +342,13 @@ class LDMTrainingConfig:
         generally the right metric to gate on.  When False, early
         stopping uses the base (training) model's validation loss
         (original behaviour).
+    patience : int | None
+        Early-stopping patience.  When set, training stops once the
+        gated validation loss (EMA or base, see ``early_stop_on_ema``)
+        has not improved for this many epochs.  None (default) disables
+        early stopping and trains for the full ``epochs``.  The best
+        checkpoint is saved whenever the gated loss improves either way,
+        so patience only limits wasted epochs after the minimum.
     print_every : int
         Print training progress every N epochs (fallback when tqdm
         is not available).
@@ -389,6 +396,7 @@ class LDMTrainingConfig:
     p_std: float = EDM_P_STD
     ema_decay: float = 0.9999
     early_stop_on_ema: bool = True
+    patience: Optional[int] = None
     print_every: int = 50
     validate_every: int = 1
     save_best: bool = True
@@ -397,6 +405,12 @@ class LDMTrainingConfig:
     random_seed: int = 42
     val_expids: Optional[list] = None
     conditioning_scaler: Optional[dict] = None
+
+    def __post_init__(self):
+        if self.patience is not None and self.patience < 1:
+            raise ValueError(
+                f"patience must be a positive number of epochs or None, got {self.patience}"
+            )
 
 
 @dataclass
@@ -422,6 +436,10 @@ class LDMTrainingHistory:
         ``early_stop_on_ema``).
     best_epoch : int
         Epoch where best validation loss was achieved.
+    stopped_early : bool
+        True if training was ended by ``LDMTrainingConfig.patience``
+        before reaching ``epochs``.  The number of epochs actually run
+        is ``len(train_losses)``.
     """
 
     train_losses: list[float] = field(default_factory=list)
@@ -429,6 +447,7 @@ class LDMTrainingHistory:
     ema_val_losses: list[float] = field(default_factory=list)
     best_val_loss: float = float("inf")
     best_epoch: int = -1
+    stopped_early: bool = False
 
 
 # ============================================================================
@@ -454,6 +473,10 @@ class LatentDiffusionTrainer:
     early stopping / best-model saving.  Both base and EMA validation
     losses are always recorded in the history (and logged to wandb when
     enabled) so they can be compared.
+
+    Training runs for ``config.epochs`` unless ``config.patience`` is set,
+    in which case it stops early once the gated validation loss has not
+    improved for ``patience`` epochs.
 
     Parameters
     ----------
@@ -698,6 +721,13 @@ class LatentDiffusionTrainer:
                     if cfg.save_best:
                         self._save_checkpoint(epoch, gate_loss)
 
+                # Early stopping: no improvement for `patience` epochs
+                if (
+                    cfg.patience is not None
+                    and epoch - self.history.best_epoch >= cfg.patience
+                ):
+                    self.history.stopped_early = True
+
                 # Update tqdm postfix with current metrics
                 if tqdm is not None and isinstance(epoch_iter, tqdm):
                     postfix = {
@@ -735,6 +765,17 @@ class LatentDiffusionTrainer:
             # Call on_epoch_end callback
             if self.on_epoch_end is not None:
                 self.on_epoch_end(self.model, self.ema_model, self.history, epoch)
+
+            if self.history.stopped_early:
+                if tqdm is not None and isinstance(epoch_iter, tqdm):
+                    epoch_iter.close()
+                which = "EMA" if (cfg.early_stop_on_ema and self.ema_model is not None) else "base"
+                print(
+                    f"Early stopping at epoch {epoch}: {which} validation loss has not "
+                    f"improved for {cfg.patience} epochs "
+                    f"(best {self.history.best_val_loss:.6f} at epoch {self.history.best_epoch})"
+                )
+                break
 
         return self.model, self.ema_model, self.history
 
@@ -814,6 +855,7 @@ class LatentDiffusionTrainer:
                     "p_mean": self.config.p_mean,
                     "p_std": self.config.p_std,
                     "ema_decay": self.config.ema_decay,
+                    "patience": self.config.patience,
                 },
             },
         }

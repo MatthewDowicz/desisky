@@ -21,7 +21,7 @@ VAE_CHECKPOINT="models/laced-dew-35.eqx"
 XLA_FLAGS="--xla_gpu_autotune_level=0" \
     srun desisky-train-ldm --variant twilight --epochs 5250 \
     --learning-rate 2e-5 --batch-size 256 --dropout-p 0.0 \
-    --hidden 32 --levels 2 --emb-dim 32 \
+    --hidden 32 --levels 2 --emb-dim 32 --patience 3000 \
     --vae-path $VAE_CHECKPOINT \
     --data-path training_data/metadata_clean.csv \
     --flux-path training_data/flux_clean.npy \
