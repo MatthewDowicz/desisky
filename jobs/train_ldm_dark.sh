@@ -2,7 +2,7 @@
 #SBATCH -A desi_g
 #SBATCH -C gpu
 #SBATCH -q shared
-#SBATCH -t 12:00:00
+#SBATCH -t 24:00:00
 #SBATCH -n 1
 #SBATCH -c 32
 #SBATCH --gpus-per-task=1
@@ -15,8 +15,8 @@ conda activate $PSCRATCH/envs/desisky
 export DESISKY_CACHE_DIR=$PSCRATCH/desisky_cache
 cd $PSCRATCH/desisky
 
-# UPDATE: Replace VAE_CHECKPOINT with the actual filename after VAE training completes
-VAE_CHECKPOINT="models/REPLACE_WITH_VAE_CHECKPOINT.eqx"
+# InfoVAE trained on the loa extraction (job 59517991, wandb run laced-dew-35)
+VAE_CHECKPOINT="models/laced-dew-35.eqx"
 
 XLA_FLAGS="--xla_gpu_autotune_level=0" \
     srun desisky-train-ldm --variant dark --epochs 25000 \
